@@ -1,0 +1,23 @@
+{
+  "_fixture": true,
+  "scanner": "scanner1",
+  "note": "SYNTHETIC. Не реальный вывод Scanner 1. Только для тестов и демо.",
+  "issues": [
+    {
+      "id": "HARDCODED_PASSWORD",
+      "path": "src/main/App.kt",
+      "line": 42,
+      "level": "HIGH",
+      "title": "Hardcoded password detected",
+      "snippet": "val password = \"hunter2\""
+    },
+    {
+      "id": "WEAK_HASH",
+      "path": "src/auth/Hash.kt",
+      "line": null,
+      "level": "MEDIUM",
+      "title": "MD5 used for password hashing",
+      "snippet": "MessageDigest.getInstance(\"MD5\")"
+    }
+  ]
+}
