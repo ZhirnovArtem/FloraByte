@@ -290,20 +290,30 @@ class Executor:
         else:
             final = "success"
 
-        # Collect summary findings if any export produced report
+        # Collect summary findings if any export produced report, and ai_report if ai.explain ran
         summary: dict[str, Any] = {"node_statuses": node_status}
+        ai_report: dict[str, Any] | None = None
         for out in outputs.values():
             if "report" in out and isinstance(out["report"], dict):
                 rep = out["report"]
-                findings_list = rep.get("findings") or (rep.get("report_json") or {}).get("findings") or []
-                summary["report"] = {
-                    "findings_count": len(findings_list),
-                    "findings": findings_list,
-                    "paths": {
-                        "json_path": rep.get("json_path"),
-                        "md_path": rep.get("md_path"),
-                    },
-                }
+                if "items" in rep and "validation" in rep:
+                    ai_report = {
+                        "summary": rep.get("summary", ""),
+                        "items": rep.get("items", []),
+                        "validation": rep.get("validation", {}),
+                    }
+                if "json_path" in rep or "report_json" in rep or "report" not in summary:
+                    findings_list = rep.get("findings") or (rep.get("report_json") or {}).get("findings") or []
+                    existing_paths = (summary.get("report") or {}).get("paths") or {}
+                    new_paths = {
+                        "json_path": rep.get("json_path") or existing_paths.get("json_path"),
+                        "md_path": rep.get("md_path") or existing_paths.get("md_path"),
+                    }
+                    summary["report"] = {
+                        "findings_count": len(findings_list),
+                        "findings": findings_list,
+                        "paths": new_paths,
+                    }
 
         with self.session_factory() as session:
             run = session.get(Run, run_id)
@@ -312,6 +322,8 @@ class Executor:
                 run.started_at = run.started_at or _utcnow()
                 run.finished_at = _utcnow()
                 run.summary_json = summary
+                if ai_report is not None:
+                    run.ai_report_json = ai_report
                 session.add(run)
                 session.commit()
 
