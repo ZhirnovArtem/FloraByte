@@ -1,0 +1,16 @@
+{
+  "ruleset_id": "cybergarden-kotlin-sast",
+  "ruleset_version": "0.1.0",
+  "rules": [
+    {"id":"SAST-SEC-001","cwe":"CWE-862"},
+    {"id":"SAST-SEC-002","cwe":"CWE-352"},
+    {"id":"SAST-SEC-003","cwe":"CWE-942"},
+    {"id":"SAST-SEC-005","cwe":"CWE-256"},
+    {"id":"SAST-INJ-001","cwe":"CWE-89"},
+    {"id":"SAST-INJ-002","cwe":"CWE-78"},
+    {"id":"SAST-CRY-001","cwe":"CWE-327"},
+    {"id":"SAST-CFG-001","cwe":"CWE-200"},
+    {"id":"SAST-CFG-002","cwe":"CWE-489"},
+    {"id":"SAST-LOG-001","cwe":"CWE-532"}
+  ]
+}
