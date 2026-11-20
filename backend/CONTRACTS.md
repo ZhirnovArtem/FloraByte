@@ -1,4 +1,4 @@
-# CONTRACTS — Phase A (do not change without team confirmation)
+# CONTRACTS — Integration Baseline
 
 ## 1. Finding (organisers' submission format)
 
@@ -18,7 +18,7 @@ class Finding(BaseModel):
 
 Validators enforce path safety (no absolute, no `..`, no `:`) and typed lines.
 
-## 2. Scanner interface (for people 3 & 4)
+## 2. Scanner interface and adapters
 
 ```python
 def scan(root: Path, params: dict) -> list[Finding]:
@@ -26,11 +26,13 @@ def scan(root: Path, params: dict) -> list[Finding]:
 ```
 
 - `root` = Gradle project root.
-- Secrets must be masked (`core.masking.mask_secret`) before returning.
-- SCA receives `vuln_db_path` and `lockfile_priority` in `params`.
-- Real implementations live outside this contract; adapters call them.
-
-Stubs under `USE_STUB_SCANNERS=1` only. Default is off.
+- Secrets are masked (`app.core.masking.mask_secret`, `mask_evidence`, `redact_text`) before leaving the node.
+- SCA receives `vuln_db_path` and `lockfile_priority` in `params`. Supports both the organisers' OSV/JSON format (`{"vulnerabilities": [...]}`) and the built-in `security_scanners/sca/vulnerabilities.json`.
+- Real implementations wired in `backend/app/nodes/scanners/`:
+  - `secrets.py` → `security_scanners.secrets.scanner.SecretsScanner` (mapped to `password`, `api-key`, `configuration-token`, `private-key`)
+  - `sca.py` → `security_scanners.sca.scanner.ScaScanner`
+  - `sast.py` → `scanners.sast.engine.run` (mapped to `sql-injection`, `route-authorization`, `credentialed-cors`, `tls-verification`, `object-authorization`, etc.)
+- Stubs under `USE_STUB_SCANNERS=1` only. Default is `0`.
 
 ## 3. Node contract
 
@@ -46,9 +48,16 @@ class BaseNode(ABC):
 
 Registration: `@register_node` on the class. New node = one file, zero engine/API edits.
 
-`GET /api/node-types` returns `type, label, group, inputs, outputs, params_schema` for the palette.
+`GET /api/node-types` returns `type, label, group, inputs, outputs, params_schema` for the frontend palette and dynamic settings forms.
 
-## 4. Workflow JSON (React Flow compatible)
+## 4. AI node (`ai.explain`)
+
+- Calls `analyze_findings` from `AI_AND_INTEGRATION/AI_CODE_CHECKER/services/ai_service.py` (Gemini API, `GEMINI_API_KEY` / `LLM_API_KEY` / `credential_id`), converting platform `Finding` objects into canonical `SecurityFinding v1.0` dicts (with masked `evidence`).
+- Validates output through `app.nodes.ai.validator.validate_llm_response` (JSON schema, `finding_ref`, stripping hallucinated CVE/GHSA IDs, secret-leak check).
+- Retries once on validation failure; falls back deterministically to `fallback_report()` if key is absent or provider fails.
+- Persists result into `runs.ai_report_json` (returned as `ai_report` in `GET /api/runs/{id}`).
+
+## 5. Workflow JSON (React Flow compatible)
 
 ```json
 {
@@ -57,22 +66,18 @@ Registration: `@register_node` on the class. New node = one file, zero engine/AP
 }
 ```
 
-## 5. Execution events (WebSocket + node_runs)
+## 6. Execution events (WebSocket `/ws/runs/{run_id}` + `node_runs`)
 
 Events: `run_started`, `node_started`, `node_finished`, `node_failed`, `node_skipped`, `run_finished`.
 
 Statuses: `pending → running → success | failed | skipped`.
 
-## 6. Credentials
+## 7. Credentials
 
 Values encrypted with Fernet (`APP_SECRET_KEY` or generated file outside repo).  
 API never returns plaintext — only `"****"` + last 2–4 chars.  
 Node params store only `credential_id`.
 
-## 7. Allowed git URLs
+## 8. Allowed git URLs
 
 Configured via `GIT_CLONE_ALLOWLIST` (default contains `https://github.com/TBagirov/training`).
-
----
-
-**Phase A status:** contracts frozen, registry live, tests green.
