@@ -1,0 +1,21 @@
+{
+  "_fixture": true,
+  "scanner": "scanner2",
+  "note": "SYNTHETIC. Не реальный вывод Scanner 2. Только для тестов и демо.",
+  "results": [
+    {
+      "check_id": "INSECURE_RANDOM",
+      "location": {"file": "src/crypto/Rng.kt", "line": 15},
+      "severity": "medium",
+      "description": "Insecure random used for token generation",
+      "context": "Random()"
+    },
+    {
+      "check_id": "DEBUG_FLAG",
+      "location": {"file": "AndroidManifest.xml", "line": 12},
+      "severity": "high",
+      "description": "android:debuggable=true in manifest",
+      "context": null
+    }
+  ]
+}
