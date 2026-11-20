@@ -2,7 +2,7 @@
 
 Visual security-check workflow platform (Cyber Garden 2026 / Центр-инвест).
 
-## Phase B (current)
+## Phase C (current)
 
 - Finding model compatible with organisers' submission format
 - BaseNode + registry (`@register_node`)

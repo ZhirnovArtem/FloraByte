@@ -1,4 +1,4 @@
-"""FastAPI entrypoint — Phase B."""
+"""FastAPI entrypoint — Phase C."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from app.api.workflows import router as workflows_router
 from app.api.runs import router as runs_router
 from app.api.uploads import router as uploads_router
 from app.api.ws import router as ws_router
+from app.api.credentials import router as credentials_router
 from app.config import get_settings
 from app.core.db import init_db
 from app.core.logging import setup_logging
@@ -28,7 +29,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI Security Workflow",
-    version="0.2.0-phase-b",
+    version="0.3.0-phase-c",
     lifespan=lifespan,
 )
 
@@ -45,8 +46,9 @@ app.include_router(workflows_router)
 app.include_router(runs_router)
 app.include_router(uploads_router)
 app.include_router(ws_router)
+app.include_router(credentials_router)
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "phase": "B"}
+    return {"status": "ok", "phase": "C"}
