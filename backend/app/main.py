@@ -1,4 +1,4 @@
-"""FastAPI entrypoint — Phase C."""
+"""FastAPI entrypoint — Phase D."""
 
 from __future__ import annotations
 
@@ -14,9 +14,11 @@ from app.api.uploads import router as uploads_router
 from app.api.ws import router as ws_router
 from app.api.credentials import router as credentials_router
 from app.config import get_settings
-from app.core.db import init_db
+from app.core.db import init_db, get_engine
 from app.core.logging import setup_logging
-import app.nodes  # noqa: F401  — populate registry
+from app.engine.scheduler import reload_schedules, set_run_callback, start_scheduler
+from sqlmodel import Session
+import app.nodes  # noqa: F401
 
 
 @asynccontextmanager
@@ -24,12 +26,29 @@ async def lifespan(app: FastAPI):
     setup_logging()
     get_settings()
     init_db()
+
+    # wire scheduler → executor
+    from app.engine.executor import Executor
+
+    def session_factory():
+        return Session(get_engine())
+
+    executor = Executor(session_factory)
+
+    async def _cb(workflow_id: str, graph: dict) -> str:
+        return await executor.run_workflow(workflow_id, graph, trigger="schedule", wait=False)
+
+    set_run_callback(_cb)
+    with Session(get_engine()) as session:
+        n = reload_schedules(session)
+    start_scheduler()
+
     yield
 
 
 app = FastAPI(
     title="AI Security Workflow",
-    version="0.3.0-phase-c",
+    version="0.4.0-phase-d",
     lifespan=lifespan,
 )
 
@@ -51,4 +70,4 @@ app.include_router(credentials_router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "phase": "C"}
+    return {"status": "ok", "phase": "D"}
