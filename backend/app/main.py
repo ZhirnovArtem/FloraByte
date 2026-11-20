@@ -1,4 +1,4 @@
-"""FastAPI entrypoint — Phase D."""
+"""FastAPI entrypoint — Phase F (freeze)."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI Security Workflow",
-    version="0.5.0-phase-e",
+    version="1.0.0-phase-f",
     lifespan=lifespan,
 )
 
@@ -74,4 +74,4 @@ app.include_router(ci_router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "phase": "E"}
+    return {"status": "ok", "phase": "F", "version": "1.0.0"}
