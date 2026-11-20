@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "security-scanners"
+version = "0.1.0"
+description = "Custom Secrets and SCA scanners"
+requires-python = ">=3.10,<3.15"
+dependencies = [
+    "pytest>=7.0.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["security_scanners*"]
+
+[tool.setuptools.package-data]
+security_scanners = ["sca/*.json"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
