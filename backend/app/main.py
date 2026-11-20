@@ -13,6 +13,8 @@ from app.api.runs import router as runs_router
 from app.api.uploads import router as uploads_router
 from app.api.ws import router as ws_router
 from app.api.credentials import router as credentials_router
+from app.api.templates import router as templates_router
+from app.api.ci import router as ci_router
 from app.config import get_settings
 from app.core.db import init_db, get_engine
 from app.core.logging import setup_logging
@@ -48,7 +50,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI Security Workflow",
-    version="0.4.0-phase-d",
+    version="0.5.0-phase-e",
     lifespan=lifespan,
 )
 
@@ -66,8 +68,10 @@ app.include_router(runs_router)
 app.include_router(uploads_router)
 app.include_router(ws_router)
 app.include_router(credentials_router)
+app.include_router(templates_router)
+app.include_router(ci_router)
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "phase": "D"}
+    return {"status": "ok", "phase": "E"}
