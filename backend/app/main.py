@@ -1,4 +1,4 @@
-"""FastAPI entrypoint — Phase A skeleton."""
+"""FastAPI entrypoint — Phase B."""
 
 from __future__ import annotations
 
@@ -8,6 +8,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.node_types import router as node_types_router
+from app.api.workflows import router as workflows_router
+from app.api.runs import router as runs_router
+from app.api.uploads import router as uploads_router
+from app.api.ws import router as ws_router
 from app.config import get_settings
 from app.core.db import init_db
 from app.core.logging import setup_logging
@@ -24,7 +28,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI Security Workflow",
-    version="0.1.0-phase-a",
+    version="0.2.0-phase-b",
     lifespan=lifespan,
 )
 
@@ -37,8 +41,12 @@ app.add_middleware(
 )
 
 app.include_router(node_types_router)
+app.include_router(workflows_router)
+app.include_router(runs_router)
+app.include_router(uploads_router)
+app.include_router(ws_router)
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "phase": "A"}
+    return {"status": "ok", "phase": "B"}

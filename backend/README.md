@@ -2,7 +2,7 @@
 
 Visual security-check workflow platform (Cyber Garden 2026 / Центр-инвест).
 
-## Phase A (current)
+## Phase B (current)
 
 - Finding model compatible with organisers' submission format
 - BaseNode + registry (`@register_node`)
@@ -10,6 +10,12 @@ Visual security-check workflow platform (Cyber Garden 2026 / Центр-инве
 - SQLite schema, config, masking, Fernet crypto
 - `GET /api/node-types`, `/health`
 - Unit tests for contracts
+- CRUD workflows, uploads, runs
+- source.upload_zip / source.git_clone
+- Workflow executor (topo, branching, timeouts, partial failure)
+- findings.merge / findings.export (report.json + report.md)
+- WebSocket `/ws/runs/{id}`
+- E2E: Manual → Upload → stub scanner → Export
 
 ## Quick start
 

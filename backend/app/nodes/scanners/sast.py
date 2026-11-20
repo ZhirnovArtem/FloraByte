@@ -1,11 +1,18 @@
 from __future__ import annotations
+
+from pathlib import Path
 from typing import Any
+
 from pydantic import BaseModel
+
+from app.config import get_settings
 from app.nodes.base import BaseNode, NodeContext, Port
 from app.nodes.registry import register_node
 
+
 class Params(BaseModel):
     pass
+
 
 @register_node
 class SastScannerNode(BaseNode):
@@ -17,4 +24,14 @@ class SastScannerNode(BaseNode):
     Params = Params
 
     async def run(self, ctx: NodeContext, inputs: dict[str, Any], params: BaseModel) -> dict[str, Any]:
-        raise NotImplementedError("scanner.sast adapter — Phase C")
+        root = inputs.get("workspace") or inputs.get("in")
+        if not root:
+            raise ValueError("scanner.sast requires workspace input")
+        root = Path(root)
+        settings = get_settings()
+        if settings.use_stub_scanners:
+            from app.nodes.scanners._stubs import stub_sast_scan
+            findings = stub_sast_scan(root, {})
+        else:
+            findings = []
+        return {"findings": findings}
