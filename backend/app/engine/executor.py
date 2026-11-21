@@ -94,6 +94,14 @@ class Executor:
         await event_bus.emit(run_id, {"event": "run_started", "workflow_id": workflow_id, "trigger": trigger})
 
         async def _execute():
+            started_run = _utcnow()
+            with self.session_factory() as session:
+                run = session.get(Run, run_id)
+                if run:
+                    run.status = "running"
+                    run.started_at = run.started_at or started_run
+                    session.add(run)
+                    session.commit()
             try:
                 await self._execute_graph(run_id, graph, workspace)
             except Exception as e:

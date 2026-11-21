@@ -33,12 +33,15 @@ class EventBus:
     def history(self, run_id: str) -> list[dict[str, Any]]:
         return list(self._history.get(run_id, []))
 
-    async def subscribe(self, run_id: str) -> asyncio.Queue:
+    async def subscribe(self, run_id: str, fallback_events: list[dict[str, Any]] | None = None) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=256)
         async with self._lock:
             self._subs[run_id].append(q)
+            history = self._history.get(run_id, [])
+            if not history and fallback_events:
+                history = list(fallback_events)
             # replay history
-            for ev in self._history.get(run_id, []):
+            for ev in history:
                 try:
                     q.put_nowait(ev)
                 except asyncio.QueueFull:
