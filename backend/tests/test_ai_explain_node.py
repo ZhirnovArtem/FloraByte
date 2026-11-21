@@ -126,6 +126,57 @@ async def test_ai_explain_uses_ai_code_checker_and_validates(tmp_path, monkeypat
     assert rep["validation"]["mode"] == "llm"
     assert rep["validation"]["passed"] is True
     assert rep["validation"]["dropped_cve"] == 1
+    assert rep["validation"]["vuln_db_checked"] is True
     assert "CVE-2022-42889" in rep["items"][0]["explanation"]
     assert "CVE-2099-12345" not in rep["items"][0]["explanation"]
     assert rep["items"][0]["fix_steps"] == ["Обновить commons-text до 1.10.0"]
+
+
+@pytest.mark.asyncio
+async def test_ai_explain_openai_compatible_ollama_retry_and_secret_redaction(tmp_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    captured_payloads: list[str] = []
+
+    async def fake_chat_completion(messages, *, model=None, api_key=None, base_url=None, **kwargs):
+        captured_payloads.append(messages[-1]["content"])
+        if len(captured_payloads) == 1:
+            return "not-valid-json-first-try"
+        return (
+            '```json\n'
+            '{"summary": "Найдена 1 проблема.", "items": ['
+            '{"finding_ref": 0, "explanation": "Найден встроенный секрет в Cfg.kt:5.", '
+            '"risk": "HIGH", "fix_steps": ["Вынести в env"]}]}\n'
+            '```'
+        )
+
+    node = AiExplainNode()
+    ctx = NodeContext(run_id="r4", node_id="ai1", workspace=tmp_path)
+    finding = Finding(
+        category="SECRET",
+        path="Cfg.kt",
+        **{"class": "api-key"},
+        line=5,
+        severity="HIGH",
+        description="api_key='sk-TopSecretValue1234567890abcd'",
+        evidence='val k = "sk-TopSecretValue1234567890abcd"',
+    )
+
+    with patch("app.nodes.ai.llm_client.chat_completion", new=fake_chat_completion):
+        out = await node.run(
+            ctx,
+            {"findings": [finding]},
+            Params(provider="openai_compatible", base_url="http://localhost:11434/v1", model="llama3.2"),
+        )
+
+    rep = out["report"]
+    assert rep["validation"]["mode"] == "llm"
+    assert rep["validation"]["retried"] is True
+    assert rep["validation"]["passed"] is True
+    assert len(captured_payloads) == 2
+    for payload in captured_payloads:
+        assert "sk-TopSecretValue1234567890abcd" not in payload
+

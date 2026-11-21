@@ -18,7 +18,7 @@ from app.core.crypto import decrypt
 from app.core.db import get_engine
 from app.core.masking import mask_evidence, redact_text
 from app.core.models import Credential, Finding
-from app.nodes.ai.validator import fallback_report, validate_llm_response
+from app.nodes.ai.validator import fallback_report, load_known_advisories, validate_llm_response
 from app.nodes.base import BaseNode, NodeContext, Port
 from app.nodes.registry import register_node
 
@@ -35,6 +35,7 @@ class Params(BaseModel):
     credential_id: str = Field("", description="LLM credential id (preferred)")
     model: str = Field("", description="Optional model name override")
     provider: str = Field("", description="gemini or openai_compatible (defaults to LLM_PROVIDER)")
+    base_url: str = Field("", description="Optional OpenAI-compatible base_url (e.g. Ollama http://localhost:11434/v1)")
 
 
 def _findings_as_dicts(inputs: dict[str, Any]) -> list[dict]:
@@ -50,10 +51,11 @@ def _findings_as_dicts(inputs: dict[str, Any]) -> list[dict]:
     return out
 
 
-def _resolve_gemini_config(params: Params) -> tuple[str | None, str | None]:
+def _resolve_gemini_config(params: Params) -> tuple[str | None, str | None, str | None]:
     settings = get_settings()
     key = settings.llm_api_key or os.getenv("GEMINI_API_KEY", "").strip() or None
     model = params.model or os.getenv("GEMINI_MODEL", "").strip() or None
+    base_url = params.base_url.strip() or None
     if params.credential_id:
         with Session(get_engine()) as session:
             cred = session.get(Credential, params.credential_id)
@@ -62,9 +64,11 @@ def _resolve_gemini_config(params: Params) -> tuple[str | None, str | None]:
                 parts = [p.strip() for p in raw.split("|")]
                 if parts[0]:
                     key = parts[0]
+                if len(parts) > 1 and parts[1]:
+                    base_url = base_url or parts[1]
                 if len(parts) > 2 and parts[2]:
                     model = model or parts[2]
-    return key, model
+    return key, model, base_url
 
 
 def _to_canonical_security_findings(findings: list[dict]) -> list[dict]:
@@ -172,8 +176,13 @@ async def _call_ai_code_checker(findings: list[dict], api_key: str, model: str |
     }
 
 
-async def _call_openai_compatible(findings: list[dict], api_key: str | None, model: str | None) -> dict[str, Any]:
-    """JSON-only response from OpenAI-style local/cloud models; validated after call."""
+async def _call_openai_compatible(
+    findings: list[dict],
+    api_key: str | None,
+    model: str | None,
+    base_url: str | None = None,
+) -> str:
+    """JSON-only response from OpenAI-style local/cloud models (Ollama, vLLM, Gemini OpenAI); validated after call."""
     from app.nodes.ai.llm_client import chat_completion
 
     compact = _to_canonical_security_findings(findings)
@@ -185,15 +194,24 @@ async def _call_openai_compatible(findings: list[dict], api_key: str | None, mod
             {"role": "system", "content": (
                 "You are a security explainer, NOT a vulnerability detector. "
                 "Only explain provided findings. Return a JSON object with keys 'summary' and 'items'. "
-                "Each item has integer finding_ref, string explanation, string risk, string[] fix_steps. "
+                "Each item has integer finding_ref, string explanation (what was found, where, why dangerous), "
+                "string risk (LOW/MEDIUM/HIGH/CRITICAL + impact), string[] fix_steps (concrete code/config changes). "
                 "Reference only provided finding_ref numbers, paths and advisory IDs. "
                 "Never fabricate CVEs; never disclose credentials or literal secret values. "
                 "Use Russian language. Return JSON only."
             )},
             {"role": "user", "content": json.dumps(safe_input, ensure_ascii=False)},
-        ], model=model, api_key=api_key,
+        ],
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
     )
-    return json.loads(text)
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if len(lines) >= 3 and lines[-1].strip().startswith("```"):
+            cleaned = "\n".join(lines[1:-1]).strip()
+    return cleaned
 
 
 @register_node
@@ -229,11 +247,13 @@ class AiExplainNode(BaseNode):
                 }
             }
 
-        key, model = _resolve_gemini_config(params)
+        key, model, base_url = _resolve_gemini_config(params)
         settings = get_settings()
         provider = (params.provider or settings.llm_provider).strip().lower()
+        effective_base = base_url or settings.llm_base_url
         if not model:
             model = settings.llm_model if provider == "openai_compatible" else None
+        known_advisories = load_known_advisories(settings.vuln_db_path)
         parsed = None
         fallback_reason: str | None = None
         try:
@@ -243,16 +263,22 @@ class AiExplainNode(BaseNode):
                 raise RuntimeError("GEMINI_API_KEY / LLM_API_KEY is not configured")
             if provider == "openai_compatible" and not key:
                 from urllib.parse import urlsplit
-                host = (urlsplit(settings.llm_base_url).hostname or "").lower()
+                host = (urlsplit(effective_base).hostname or "").lower()
                 if host not in ("localhost", "127.0.0.1", "::1"):
                     raise RuntimeError("LLM_API_KEY required for a non-local model")
-            call_model = _call_openai_compatible if provider == "openai_compatible" else _call_ai_code_checker
-            raw_obj = await call_model(findings, key, model)
-            parsed, validation = validate_llm_response(json.dumps(raw_obj, ensure_ascii=False), findings)
+
+            async def _invoke() -> str:
+                if provider == "openai_compatible":
+                    return await _call_openai_compatible(findings, key, model, effective_base)
+                res = await _call_ai_code_checker(findings, key or "", model)
+                return json.dumps(res, ensure_ascii=False)
+
+            raw_text = await _invoke()
+            parsed, validation = validate_llm_response(raw_text, findings, known_advisories=known_advisories)
             if parsed is None or not validation.get("passed"):
                 validation["retried"] = True
-                raw_obj2 = await call_model(findings, key, model)
-                parsed, validation2 = validate_llm_response(json.dumps(raw_obj2, ensure_ascii=False), findings)
+                raw_text2 = await _invoke()
+                parsed, validation2 = validate_llm_response(raw_text2, findings, known_advisories=known_advisories)
                 validation = {**validation2, "retried": True}
         except Exception as e:
             safe_err = redact_text(str(e), [key] if key else None)
