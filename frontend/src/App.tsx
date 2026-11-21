@@ -7,6 +7,7 @@ import type { AuthUserDto } from './types/workflow';
 function App() {
   const [authChecking, setAuthChecking] = useState(true);
   const [user, setUser] = useState<AuthUserDto | null>(null);
+  const [persistentStorage, setPersistentStorage] = useState<boolean>(true);
 
   useEffect(() => {
     api.setOnUnauthorized(() => {
@@ -18,6 +19,9 @@ function App() {
         const status = await api.fetchAuthMe();
         if (!cancelled) {
           setUser(status.authenticated ? status.user : null);
+          if (typeof status.persistent_storage === 'boolean') {
+            setPersistentStorage(status.persistent_storage);
+          }
         }
       } catch {
         if (!cancelled) {
@@ -60,7 +64,12 @@ function App() {
   }
 
   if (!user) {
-    return <AuthScreen onAuthenticated={(nextUser) => setUser(nextUser)} />;
+    return (
+      <AuthScreen
+        persistentStorage={persistentStorage}
+        onAuthenticated={(nextUser) => setUser(nextUser)}
+      />
+    );
   }
 
   return <WorkflowEditor key={user.id} user={user} onLogout={() => void handleLogout()} />;

@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
+from app.config import get_settings
 from app.core.auth import (
     SESSION_COOKIE_NAME,
     _as_utc,
@@ -27,8 +28,10 @@ from app.core.auth import (
     utcnow,
     verify_password,
 )
+from app.core.crypto import is_production_env
 from app.core.db import get_session
 from app.core.models import PasswordResetToken, User, UserSession
+from app.core.user_store import restore_user_into_session, upsert_user_record
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -85,7 +88,9 @@ def register(
         raise HTTPException(429, "Слишком много попыток регистрации. Повторите позже.")
 
     email = _norm_email(body.email)
-    existing = session.exec(select(User).where(User.email == email)).first()
+    existing = session.exec(select(User).where(User.email == email)).first() or restore_user_into_session(
+        session, email
+    )
     if existing:
         raise HTTPException(409, "Пользователь с таким email уже зарегистрирован")
 
@@ -93,6 +98,8 @@ def register(
     session.add(user)
     session.commit()
     session.refresh(user)
+    users_file = upsert_user_record(user)
+    logger.info("Registered user %s (saved to DB and %s)", email, users_file.name)
 
     raw_token, sess_row = create_user_session(session, user)
     set_session_cookie(response, request, raw_token)
@@ -114,9 +121,20 @@ def login(
     ip = _client_ip(request)
     rate_key = f"login:{ip}:{email}"
 
-    # Check brute-force quota without consuming on valid password? Count failed attempts cleanly:
+    # Check DB first, then fall back to synced users file so credentials persist cleanly
     user = session.exec(select(User).where(User.email == email)).first()
-    if not user or not verify_password(body.password, user.password_hash):
+    if not user:
+        user = restore_user_into_session(session, email)
+    if not user:
+        logger.warning("Login failed for %s: user not found in DB or users file", email)
+        if not login_limiter.allow(rate_key):
+            raise HTTPException(
+                429,
+                "Превышено число неудачных попыток входа. Повторите через 5 минут или восстановите пароль.",
+            )
+        raise HTTPException(401, "Неверный email или пароль")
+    if not verify_password(body.password, user.password_hash):
+        logger.warning("Login failed for %s: password hash mismatch", email)
         if not login_limiter.allow(rate_key):
             raise HTTPException(
                 429,
@@ -164,15 +182,23 @@ def logout(
 
 @router.get("/me")
 def me(request: Request, session: Session = Depends(get_session)):
+    db_url = get_settings().database_url.lower()
+    persistent_storage = not (is_production_env() and "sqlite" in db_url)
     raw_cookie = request.cookies.get(SESSION_COOKIE_NAME, "")
     resolved = resolve_session_from_token(session, raw_cookie)
     if not resolved:
-        return {"authenticated": False, "user": None, "csrf_token": ""}
+        return {
+            "authenticated": False,
+            "user": None,
+            "csrf_token": "",
+            "persistent_storage": persistent_storage,
+        }
     sess_row, user = resolved
     return {
         "authenticated": True,
         "user": _user_dict(user),
         "csrf_token": sess_row.csrf_token,
+        "persistent_storage": persistent_storage,
     }
 
 
@@ -254,6 +280,7 @@ def reset_password(
     user.password_hash = hash_password(body.new_password)
     session.add(prt)
     session.add(user)
+    upsert_user_record(user)
 
     # Revoke all active sessions on password change
     active_sessions = session.exec(

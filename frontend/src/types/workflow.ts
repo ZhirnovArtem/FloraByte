@@ -8,6 +8,7 @@ export type AuthStatusDto = {
   authenticated: boolean;
   user: AuthUserDto | null;
   csrf_token: string;
+  persistent_storage?: boolean;
 };
 
 export type PortSpec = {

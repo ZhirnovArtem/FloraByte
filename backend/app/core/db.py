@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from pathlib import Path
 
 from sqlalchemy import inspect, text
 from sqlmodel import Session, SQLModel, create_engine
@@ -10,10 +11,13 @@ from sqlmodel import Session, SQLModel, create_engine
 from app.config import get_settings
 
 _engine = None
+_BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
 def _normalized_db_url(raw_url: str) -> str:
     url = (raw_url or "").strip()
+    if url == "sqlite:///./ai_security_workflow.db":
+        return f"sqlite:///{(_BACKEND_DIR / 'ai_security_workflow.db').as_posix()}"
     if url.startswith("postgres://"):
         return "postgresql+psycopg://" + url[len("postgres://") :]
     if url.startswith("postgresql://") and "+" not in url.split("://", 1)[0]:
@@ -53,6 +57,10 @@ def init_db() -> None:
     engine = get_engine()
     SQLModel.metadata.create_all(engine)
     _ensure_columns(engine)
+    from app.core.user_store import sync_users_with_db
+
+    with Session(engine) as session:
+        sync_users_with_db(session)
 
 
 def get_session() -> Generator[Session, None, None]:

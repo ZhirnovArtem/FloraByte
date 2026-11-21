@@ -5,10 +5,11 @@ import type { AuthUserDto } from '../types/workflow';
 type Mode = 'login' | 'register' | 'forgot' | 'reset';
 
 type AuthScreenProps = {
+  persistentStorage?: boolean;
   onAuthenticated: (user: AuthUserDto) => void;
 };
 
-export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
+export default function AuthScreen({ persistentStorage = true, onAuthenticated }: AuthScreenProps) {
   const [mode, setMode] = useState<Mode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -132,6 +133,24 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
             AI Security Workflow · защищённый вход
           </div>
         </div>
+
+        {!persistentStorage && (
+          <div
+            style={{
+              marginBottom: 14,
+              padding: '9px 11px',
+              borderRadius: 8,
+              background: '#fffbeb',
+              border: '1px solid #fde68a',
+              color: '#92400e',
+              fontSize: 12,
+              lineHeight: 1.4,
+            }}
+          >
+            Сервер работает на временной БД (SQLite без PostgreSQL <code>DATABASE_URL</code>): после перезапуска
+            или деплоя аккаунты сбрасываются. Если вход не проходит — зарегистрируйтесь заново или подключите PostgreSQL.
+          </div>
+        )}
 
         <div
           style={{

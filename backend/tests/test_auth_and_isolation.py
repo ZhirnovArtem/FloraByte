@@ -275,3 +275,51 @@ def test_per_user_isolation_workflows_runs_credentials_integrations(auth_client:
         assert client_b.get(f"/api/runs/{run_a_id}").status_code == 403
         assert client_b.get(f"/api/runs/{run_a_id}/report.json").status_code == 403
         assert client_b.delete(f"/api/credentials/{cred_a_id}").status_code == 403
+
+
+def test_users_file_persistence_and_login_recovery(tmp_path: Path, monkeypatch):
+    import json
+
+    users_file = tmp_path / "users.json"
+    db1 = tmp_path / "first.db"
+    db2 = tmp_path / "recreated.db"
+
+    monkeypatch.setenv("AUTH_USERS_FILE", str(users_file))
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db1}")
+    monkeypatch.setenv("AUTH_REQUIRED", "1")
+    get_settings.cache_clear()
+    db_mod._engine = None
+
+    with TestClient(app) as client1:
+        reg = client1.post(
+            "/api/auth/register",
+            json={"email": "art.zhirnov@gmail.com", "password": "MySecretPassword1!"},
+        )
+        assert reg.status_code == 200
+
+    assert users_file.exists()
+    data = json.loads(users_file.read_text(encoding="utf-8"))
+    rec = data["users"]["art.zhirnov@gmail.com"]
+    assert rec["password_hash"].startswith("pbkdf2_sha256$")
+    assert "MySecretPassword1!" not in json.dumps(data)
+
+    # Simulate DB wipe / recreation while users.json survives
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db2}")
+    get_settings.cache_clear()
+    db_mod._engine = None
+
+    with TestClient(app) as client2:
+        bad = client2.post(
+            "/api/auth/login",
+            json={"email": "art.zhirnov@gmail.com", "password": "WrongPassword!"},
+        )
+        assert bad.status_code == 401
+
+        ok = client2.post(
+            "/api/auth/login",
+            json={"email": "art.zhirnov@gmail.com", "password": "MySecretPassword1!"},
+        )
+        assert ok.status_code == 200
+        assert ok.json()["authenticated"] is True
+        assert ok.json()["user"]["email"] == "art.zhirnov@gmail.com"
+
