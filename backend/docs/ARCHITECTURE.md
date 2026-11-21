@@ -1,31 +1,31 @@
-# Архитектура AI Security Workflow (Backend)
+# Архитектура AI Security Workflow (FloraByte)
 
 ## Общая схема
 
 ```
-React Flow (Frontend)
-        │  HTTP + WebSocket
+React Flow (Frontend)  ── Drag & Drop · Node Settings · Live WS · Report & History
+        │  HTTP + WebSocket (/api, /ws)
         ▼
-┌───────────────────────────────────────────────────────────┐
-│                     FastAPI (app/api)                     │
-│  workflows · runs · node-types · uploads · credentials    │
-│  templates · ws · ci                                      │
-└───────────────────────────┬───────────────────────────────┘
-                            │
-              ┌─────────────▼──────────────┐
-              │   Workflow Engine          │
-              │   (app/engine)             │
-              │   graph · executor · events│
-              │   scheduler (APScheduler)  │
-              └─────────────┬──────────────┘
-                            │  type → registry
-              ┌─────────────▼──────────────┐
-              │   Node Registry            │
-              │   (app/nodes)              │
-              │   @register_node           │
-              └───┬────┬────┬────┬────┬────┘
-                  │    │    │    │    │
-             source  trigger logic scanners  ai  notify  findings
+┌────────────────────────────────────────────────────────────────────┐
+│                        FastAPI (app/api)                           │
+│  workflows · runs · node-types · uploads · credentials · templates │
+│  ws (live + DB replay) · ci (/api/ci/run, /runs/{id}, /webhook)    │
+└────────────────────────────────┬───────────────────────────────────┘
+                                 │
+                   ┌─────────────▼──────────────┐
+                   │   Workflow Engine          │
+                   │   (app/engine)             │
+                   │   graph · executor · events│
+                   │   scheduler (APScheduler)  │
+                   └─────────────┬──────────────┘
+                                 │  type → registry
+                   ┌─────────────▼──────────────┐
+                   │   Node Registry            │
+                   │   (app/nodes)              │
+                   │   @register_node           │
+                   └───┬────┬────┬────┬────┬────┘
+                       │    │    │    │    │
+                  source  trigger logic scanners  ai  notify  findings
 ```
 
 ## Принципы
@@ -36,77 +36,55 @@ React Flow (Frontend)
    Никаких правок в executor / API.
 
 2. **Контракты зафиксированы** (`CONTRACTS.md`)  
-   - `Finding` — формат организаторов  
-   - `scan(root, params) → list[Finding]` — интерфейс для сканеров  
-   - Порты (`Workspace | Findings | Report | Any`)  
-   - События WebSocket
+   - `Finding` — формат организаторов (`{"findings": [...]}`)  
+   - `scan(root, params) → list[Finding]` — единый интерфейс сканеров  
+   - Типизированные порты (`Workspace | Findings | Report | Any`)  
+   - События WebSocket с replay из БД после рестарта
 
-3. **Безопасность**  
-   - Credentials → Fernet (`APP_SECRET_KEY`)  
-   - Секреты маскируются до логов / LLM / API / WS  
-   - `git_clone` только из allowlist  
-   - Zip-slip защита, лимиты размера/файлов  
-   - LLM получает только замаскированный `evidence`
+3. **Безопасность и изоляция**  
+   - Credentials → Fernet (`APP_SECRET_KEY` или постоянный ключ `~/.florabyte/secret.key`)  
+   - Секреты маскируются (`redact_text`) до логов / LLM / API / WS / уведомлений  
+   - `source.git_clone` ограничен allowlist (`https://github.com/TBagirov/training`)  
+   - `source.upload_zip` защищён от zip-slip, symlinks, zip-bomb (потоковый подсчёт байт, max ratio, timeout)  
+   - `notify.webhook` защищён от SSRF и DNS rebinding (резолвинг + проверка private/loopback/link-local IP, pinning IP + `sni_hostname`, запрет редиректов, лимит ответа 64 KB)  
+   - Уведомления поддерживают `dry_run` и до 3 ретраев с экспоненциальной задержкой на `429`/`5xx`/сетевых ошибках
 
-4. **Выполнение**  
-   - Топологический порядок  
-   - `asyncio` + `to_thread` для блокирующих сканеров  
-   - Таймаут на ноду (по умолчанию 120 с)  
-   - Падение одной ноды → `failed` + dependent `skipped`, независимые ветки продолжают  
-   - Workspace: `/tmp/runs/{run_id}` (чистится после)
+4. **Отказоустойчивое выполнение**  
+   - Топологический порядок выполнения DAG  
+   - `asyncio` + `to_thread` для сканеров и блокирующего I/O  
+   - Изоляция сбоев: падение одной ветки (`failed` + dependent `skipped`) не останавливает остальные сканеры и итоговый экспорт (`status="partial"`)  
+   - Постоянный workspace `/tmp/runs/{run_id}` очищается по завершении
 
 ## Потоки данных
 
 ```
-trigger → source (workspace: Path)
-       → scanners (findings: list[Finding])
+trigger (manual / cron) → source (upload_zip / git_clone)
+       → scanners (secrets / sca / sast)
        → findings.merge (dedup)
        → findings.export (report.json + report.md)
-       → ai.explain (validated explanation + summary)
+       → ai.explain (AI_CODE_CHECKER + validator + fallback)
        → logic.if_else (по severity / count)
-       → notify.telegram / webhook
+       → notify.telegram / notify.webhook
 ```
 
-## AI-нода (обязательный валидатор)
+## AI-нода и анти-галлюцинационный валидатор
 
-1. В LLM уходят только Finding с замаскированным evidence.  
-2. Ответ — строгий JSON по Pydantic-схеме.  
+1. В LLM уходят только `Finding` с замаскированным `evidence`.  
+2. Ответ приводится к строгой Pydantic-схеме.  
 3. `validator.py` проверяет:
-   - схему
+   - схему ответа
    - существование `finding_ref`
-   - совпадение path/line с реальной находкой
-   - CVE/GHSA только из переданных advisoryId + aliases
-   - отсутствие похожих на секреты строк
-4. При провале — один retry, затем детерминированный fallback (без LLM).  
-5. В output всегда есть `validation: {passed, retried, dropped_items, ...}`.
+   - совпадение `path`/`line` с реальной находкой
+   - CVE/GHSA строго из переданных `advisoryId` + `aliases` (с поддержкой `VULN_DB_PATH`)
+   - отсутствие строк, похожих на незамаскированные секреты
+4. При провале — retry, затем детерминированный обогащённый fallback (без LLM).  
+5. В output всегда присутствует `validation: {passed, retried, mode, dropped_items, ...}`.
 
-## Хранилище
+## Хранилище (SQLite / SQLModel)
 
 | Таблица | Назначение |
 |--------|------------|
-| `workflows` | id, name, graph_json, is_template, … |
-| `runs` | id, workflow_id, status, summary_json, ai_report_json |
-| `node_runs` | per-node status + output_preview |
+| `workflows` | id, name, graph_json, is_template, schedule_cron |
+| `runs` | id, workflow_id, status (`running` / `success` / `partial` / `failed`), summary_json, ai_report_json |
+| `node_runs` | per-node status, timing, error, output_preview |
 | `credentials` | encrypted_value (Fernet) |
-
-## Добавление новой ноды (пример)
-
-```python
-# app/nodes/notify/slack.py
-from app.nodes.base import BaseNode, Port
-from app.nodes.registry import register_node
-
-@register_node
-class SlackNotifyNode(BaseNode):
-    type = "notify.slack"
-    label = "Slack"
-    group = "notify"
-    inputs = [Port(name="in", kind="Any")]
-    outputs = []
-    Params = ...  # Pydantic model
-
-    async def run(self, ctx, inputs, params):
-        ...
-```
-
-После импорта (или `import app.nodes.notify.slack`) нода появляется в `GET /api/node-types` без изменений движка.
