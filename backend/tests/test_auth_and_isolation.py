@@ -252,15 +252,11 @@ def test_per_user_isolation_workflows_runs_credentials_integrations(auth_client:
         assert client_b.delete(f"/api/credentials/{cred_a_id}").status_code == 403
 
 
-def test_users_file_persistence_and_login_recovery(tmp_path: Path, monkeypatch):
-    import json
-
-    users_file = tmp_path / "users.json"
-    db1 = tmp_path / "first.db"
-    db2 = tmp_path / "recreated.db"
-
-    monkeypatch.setenv("AUTH_USERS_FILE", str(users_file))
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db1}")
+def test_single_source_of_truth_no_duplicate_account_files(tmp_path, monkeypatch):
+    """Accounts live exclusively in DATABASE_URL (users table); no sidecar JSON/SQLite account stores are created."""
+    db_file = tmp_path / "primary.db"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
     monkeypatch.setenv("AUTH_REQUIRED", "1")
     get_settings.cache_clear()
     db_mod._engine = None
@@ -271,18 +267,16 @@ def test_users_file_persistence_and_login_recovery(tmp_path: Path, monkeypatch):
             json={"email": "art.zhirnov@gmail.com", "password": "MySecretPassword1!"},
         )
         assert reg.status_code == 200
+        user_id = reg.json()["user"]["id"]
 
-    assert users_file.exists()
-    data = json.loads(users_file.read_text(encoding="utf-8"))
-    rec = data["users"]["art.zhirnov@gmail.com"]
-    assert rec["password_hash"].startswith("pbkdf2_sha256$")
-    assert "MySecretPassword1!" not in json.dumps(data)
+    # No legacy sidecar stores created
+    assert not (tmp_path / "database.db").exists()
+    assert not (tmp_path / "users.json").exists()
+    assert not (tmp_path / "data" / "users.json").exists()
 
-    # Simulate DB wipe / recreation while users.json survives
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db2}")
-    get_settings.cache_clear()
+    # Re-open app pointing at the same DATABASE_URL -> login succeeds with original password & preserves ID
     db_mod._engine = None
-
+    get_settings.cache_clear()
     with TestClient(app) as client2:
         bad = client2.post(
             "/api/auth/login",
@@ -292,67 +286,11 @@ def test_users_file_persistence_and_login_recovery(tmp_path: Path, monkeypatch):
 
         ok = client2.post(
             "/api/auth/login",
-            json={"email": "art.zhirnov@gmail.com", "password": "MySecretPassword1!"},
+            json={"email": "ART.ZHIRNOV@gmail.com", "password": "MySecretPassword1!"},
         )
         assert ok.status_code == 200
         assert ok.json()["authenticated"] is True
+        assert ok.json()["user"]["id"] == user_id
         assert ok.json()["user"]["email"] == "art.zhirnov@gmail.com"
 
-
-def test_accounts_database_db_sql_queries(tmp_path: Path, monkeypatch):
-    import sqlite3
-
-    accounts_db = tmp_path / "database.db"
-    users_file = tmp_path / "missing_users.json"
-    db1 = tmp_path / "main1.db"
-    db2 = tmp_path / "main2.db"
-
-    monkeypatch.setenv("AUTH_SQL_DB_PATH", str(accounts_db))
-    monkeypatch.setenv("AUTH_USERS_FILE", str(users_file))
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db1}")
-    monkeypatch.setenv("AUTH_REQUIRED", "1")
-    get_settings.cache_clear()
-    db_mod._engine = None
-
-    with TestClient(app) as client1:
-        reg = client1.post(
-            "/api/auth/register",
-            json={"email": "sqluser@example.com", "password": "SqlStrongPassword1!"},
-        )
-        assert reg.status_code == 200
-
-    assert accounts_db.exists()
-    with sqlite3.connect(str(accounts_db)) as conn:
-        tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-        assert "accounts" in tables
-        row = conn.execute(
-            "SELECT email, password_hash, is_active FROM accounts WHERE email = ?",
-            ("sqluser@example.com",),
-        ).fetchone()
-        assert row is not None
-        assert row[0] == "sqluser@example.com"
-        assert row[1].startswith("pbkdf2_sha256$")
-        assert "SqlStrongPassword1!" not in row[1]
-        assert row[2] == 1
-
-    # Remove JSON backup & recreate main app DB: login must succeed directly via SQL from database.db
-    if users_file.exists():
-        users_file.unlink()
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db2}")
-    get_settings.cache_clear()
-    db_mod._engine = None
-
-    with TestClient(app) as client2:
-        bad = client2.post(
-            "/api/auth/login",
-            json={"email": "sqluser@example.com", "password": "WrongPassword1!"},
-        )
-        assert bad.status_code == 401
-
-        ok = client2.post(
-            "/api/auth/login",
-            json={"email": "sqluser@example.com", "password": "SqlStrongPassword1!"},
-        )
-        assert ok.status_code == 200
-        assert ok.json()["user"]["email"] == "sqluser@example.com"
 

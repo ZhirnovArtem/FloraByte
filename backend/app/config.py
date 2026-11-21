@@ -16,8 +16,6 @@ _BACKEND_DIR = Path(__file__).resolve().parents[1]
 _BACKEND_ENV = _BACKEND_DIR / ".env"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_LOG_DIR = (_REPO_ROOT / "logs") if (_REPO_ROOT / "backend").is_dir() else Path("logs")
-_DEFAULT_USERS_FILE = _BACKEND_DIR / "data" / "users.json"
-_DEFAULT_ACCOUNTS_DB = _BACKEND_DIR / "database.db"
 
 
 class Settings(BaseSettings):
@@ -56,8 +54,6 @@ class Settings(BaseSettings):
 
     # Crypto & Auth
     app_secret_key: str = Field(default="", validation_alias="APP_SECRET_KEY")
-    auth_users_file: Path = Field(default=_DEFAULT_USERS_FILE, validation_alias="AUTH_USERS_FILE")
-    auth_sql_db_path: Path = Field(default=_DEFAULT_ACCOUNTS_DB, validation_alias="AUTH_SQL_DB_PATH")
     workflow_access_token: str = ""  # optional server-to-server integration token (never sent to browser)
     auth_required: bool = Field(default=True, validation_alias="AUTH_REQUIRED")
     session_ttl_days: int = Field(default=14, validation_alias="SESSION_TTL_DAYS")

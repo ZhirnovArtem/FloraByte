@@ -1,4 +1,4 @@
-"""Authentication API: register, login, logout, session introspection (/me)."""
+"""Authentication API: register, login, logout, session introspection (/me) via primary DB only."""
 
 from __future__ import annotations
 
@@ -7,10 +7,9 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from app.config import get_settings
-from app.core.accounts_db import restore_user_from_sql_db, sql_upsert_account
 from app.core.auth import (
     SESSION_COOKIE_NAME,
     clear_session_cookie,
@@ -24,9 +23,8 @@ from app.core.auth import (
     verify_password,
 )
 from app.core.crypto import is_production_env
-from app.core.db import get_session
+from app.core.db import get_session, is_postgres_url
 from app.core.models import User, UserSession
-from app.core.user_store import restore_user_into_session, upsert_user_record
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -73,21 +71,19 @@ def register(
         raise HTTPException(429, "Слишком много попыток регистрации. Повторите позже.")
 
     email = _norm_email(body.email)
-    existing = (
-        session.exec(select(User).where(User.email == email)).first()
-        or restore_user_from_sql_db(session, email)
-        or restore_user_into_session(session, email)
-    )
+    existing = session.exec(select(User).where(User.email == email)).first()
     if existing:
         raise HTTPException(409, "Пользователь с таким email уже зарегистрирован")
 
     user = User(email=email, password_hash=hash_password(body.password))
     session.add(user)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(409, "Пользователь с таким email уже зарегистрирован") from exc
     session.refresh(user)
-    sql_db_path = sql_upsert_account(user)
-    users_file = upsert_user_record(user)
-    logger.info("Registered user %s (saved to SQL %s, app DB, and %s)", email, sql_db_path.name, users_file.name)
+    logger.info("Registered user %s in primary database", email)
 
     raw_token, sess_row = create_user_session(session, user)
     set_session_cookie(response, request, raw_token)
@@ -109,28 +105,25 @@ def login(
     ip = _client_ip(request)
     rate_key = f"login:{ip}:{email}"
 
-    # Check dedicated SQL accounts database (`database.db`) and main DB / users file
     user = session.exec(select(User).where(User.email == email)).first()
     if not user:
-        user = restore_user_from_sql_db(session, email) or restore_user_into_session(session, email)
-    if not user:
-        logger.warning("Login failed for %s: user not found in DB or users file", email)
+        logger.warning("Login failed for %s: user not found in primary database", email)
         if not login_limiter.allow(rate_key):
             raise HTTPException(
                 429,
-                "Превышено число неудачных попыток входа. Повторите через 5 минут или восстановите пароль.",
+                "Превышено число неудачных попыток входа. Повторите через 5 минут.",
             )
         raise HTTPException(401, "Неверный email или пароль")
+
     if not verify_password(body.password, user.password_hash):
         logger.warning("Login failed for %s: password hash mismatch", email)
         if not login_limiter.allow(rate_key):
             raise HTTPException(
                 429,
-                "Превышено число неудачных попыток входа. Повторите через 5 минут или восстановите пароль.",
+                "Превышено число неудачных попыток входа. Повторите через 5 минут.",
             )
         raise HTTPException(401, "Неверный email или пароль")
 
-    # Even if user knows password, block if currently locked out
     if login_limiter.is_limited(rate_key):
         raise HTTPException(
             429,
@@ -170,8 +163,7 @@ def logout(
 
 @router.get("/me")
 def me(request: Request, session: Session = Depends(get_session)):
-    db_url = get_settings().database_url.lower()
-    persistent_storage = not (is_production_env() and "sqlite" in db_url)
+    persistent_storage = not (is_production_env() and not is_postgres_url())
     raw_cookie = request.cookies.get(SESSION_COOKIE_NAME, "")
     resolved = resolve_session_from_token(session, raw_cookie)
     if not resolved:

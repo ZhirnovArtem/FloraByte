@@ -30,8 +30,8 @@ from app.api.workflows import router as workflows_router
 from app.api.ws import router as ws_router
 from app.config import get_settings
 from app.core.auth import SESSION_COOKIE_NAME, resolve_session_from_token
-from app.core.crypto import encryption_key_source, get_fernet
-from app.core.db import get_engine, init_db
+from app.core.crypto import encryption_key_source, get_fernet, is_production_env
+from app.core.db import check_db_connection, get_engine, init_db, is_postgres_url
 from app.core.logging import setup_logging
 from app.engine.scheduler import reload_schedules, set_run_callback, start_scheduler
 
@@ -194,11 +194,15 @@ async def log_requests_and_errors(request: Request, call_next):
 
 @app.get("/health")
 def health():
-    db_url = get_settings().database_url.lower()
+    db_ok, db_detail = check_db_connection()
+    pg = is_postgres_url()
     return {
-        "status": "ok",
+        "status": "ok" if db_ok else "degraded",
         "phase": "F",
         "version": "1.0.0",
         "secret_key_source": encryption_key_source(),
-        "storage_backend": "postgresql" if "postgres" in db_url else "sqlite",
+        "storage_backend": "postgresql" if pg else "sqlite",
+        "persistent_storage": not (is_production_env() and not pg),
+        "database_connected": db_ok,
+        "database_detail": db_detail,
     }
