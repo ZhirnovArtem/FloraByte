@@ -13,6 +13,7 @@ import type {
 } from '../types/workflow';
 
 const API_TOKEN_KEY = 'florabyte-workflow-api-token';
+const API_BASE_URL = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 
 export function setApiAccessToken(token: string): void {
   if (token) sessionStorage.setItem(API_TOKEN_KEY, token);
@@ -27,7 +28,7 @@ function authenticatedHeaders(extra?: HeadersInit): Headers {
 }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, { ...init, headers: authenticatedHeaders(init?.headers) });
+  const res = await fetch(`${API_BASE_URL}${url}`, { ...init, headers: authenticatedHeaders(init?.headers) });
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`;
     try {
@@ -119,7 +120,9 @@ export async function getReportJson(runId: string): Promise<{ findings: FindingD
 }
 
 export async function getReportMd(runId: string): Promise<string> {
-  const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/report.md`, { headers: authenticatedHeaders() });
+  const res = await fetch(`${API_BASE_URL}/api/runs/${encodeURIComponent(runId)}/report.md`, {
+    headers: authenticatedHeaders(),
+  });
   if (!res.ok) {
     throw new Error(`${res.status} ${res.statusText}`);
   }
@@ -149,9 +152,12 @@ export function subscribeRunEvents(
   onClose?: () => void,
 ): WebSocket {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsBaseUrl = API_BASE_URL
+    ? API_BASE_URL.replace(/^http/, 'ws')
+    : `${proto}//${window.location.host}`;
   const token = sessionStorage.getItem(API_TOKEN_KEY);
   const protocols = token ? ['florabyte', `auth.${token}`] : undefined;
-  const ws = new WebSocket(`${proto}//${window.location.host}/ws/runs/${encodeURIComponent(runId)}`, protocols);
+  const ws = new WebSocket(`${wsBaseUrl}/ws/runs/${encodeURIComponent(runId)}`, protocols);
   ws.onmessage = (msg) => {
     try {
       const parsed = JSON.parse(String(msg.data)) as WsRunEvent;
@@ -169,7 +175,9 @@ export function subscribeRunEvents(
 }
 
 export async function downloadRunReport(runId: string, format: 'json' | 'md' | 'pdf'): Promise<void> {
-  const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/report.${format}`, { headers: authenticatedHeaders() });
+  const res = await fetch(`${API_BASE_URL}/api/runs/${encodeURIComponent(runId)}/report.${format}`, {
+    headers: authenticatedHeaders(),
+  });
   if (!res.ok) throw new Error(`Не удалось скачать отчёт: ${res.status}`);
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
