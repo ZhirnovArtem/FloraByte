@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -9,10 +11,13 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_DEFAULT_TMP = Path(tempfile.gettempdir()) if os.name == "nt" else Path("/tmp")
+_BACKEND_ENV = Path(__file__).resolve().parents[1] / ".env"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(".env", str(_BACKEND_ENV)),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -21,8 +26,8 @@ class Settings(BaseSettings):
     app_name: str = "AI Security Workflow"
     debug: bool = False
     database_url: str = "sqlite:///./ai_security_workflow.db"
-    runs_dir: Path = Path("/tmp/runs")
-    upload_dir: Path = Path("/tmp/uploads")
+    runs_dir: Path = _DEFAULT_TMP / ("florabyte_runs" if os.name == "nt" else "runs")
+    upload_dir: Path = _DEFAULT_TMP / ("florabyte_uploads" if os.name == "nt" else "uploads")
     node_timeout_sec: int = 120
     use_stub_scanners: bool = Field(default=False, validation_alias="USE_STUB_SCANNERS")
 
