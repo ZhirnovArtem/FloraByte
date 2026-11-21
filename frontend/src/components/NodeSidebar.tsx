@@ -23,6 +23,11 @@ const GROUP_LABELS: Record<string, string> = {
 
 const GROUP_ORDER = ['trigger', 'source', 'scanner', 'logic', 'findings', 'ai', 'notify', 'custom'];
 
+const AI_PROMPT_EXAMPLES = [
+  'Каждый день в 14:00 проверяй код из репозитория на наличие секретов и отправляй отчет на почту',
+  'Проверь ZIP-архив на SAST, SCA и секреты с AI-объяснением и отправь в Telegram, если есть CRITICAL',
+];
+
 export default function NodeSidebar({
   catalog,
   catalogSource,
@@ -98,14 +103,17 @@ export default function NodeSidebar({
           <div style={{ fontSize: 11, fontWeight: 700, color: '#166534', marginBottom: 6 }}>
             AI-генератор сценария
           </div>
-          <input
-            type="text"
+          <textarea
+            rows={3}
             value={aiPrompt}
             onChange={(e) => setAiPrompt(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') void handleGenerate();
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                void handleGenerate();
+              }
             }}
-            placeholder="Напр.: git + секреты + telegram"
+            placeholder="Например: Каждый день в 14:00 проверяй репозиторий на секреты и отправляй отчет на почту"
             style={{
               width: '100%',
               boxSizing: 'border-box',
@@ -114,8 +122,33 @@ export default function NodeSidebar({
               border: '1px solid #86efac',
               fontSize: 12,
               marginBottom: 6,
+              resize: 'vertical',
+              fontFamily: 'inherit',
             }}
           />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+            {AI_PROMPT_EXAMPLES.map((ex, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => setAiPrompt(ex)}
+                title="Подставить пример"
+                style={{
+                  textAlign: 'left',
+                  padding: '4px 6px',
+                  borderRadius: 5,
+                  border: '1px dashed #86efac',
+                  background: '#ffffff',
+                  color: '#166534',
+                  fontSize: 10,
+                  lineHeight: 1.3,
+                  cursor: 'pointer',
+                }}
+              >
+                {ex}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             disabled={generating || !aiPrompt.trim()}
@@ -132,7 +165,7 @@ export default function NodeSidebar({
               cursor: generating ? 'wait' : 'pointer',
             }}
           >
-            {generating ? 'Генерация…' : 'Сгенерировать граф'}
+            {generating ? 'Генерация…' : 'Сгенерировать сценарий'}
           </button>
         </div>
       )}

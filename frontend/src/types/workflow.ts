@@ -286,7 +286,9 @@ export type CredentialDto = {
 
 export type GeneratedWorkflowDto = {
   name: string;
+  summary?: string;
   mode: string;
+  provider?: string | null;
   graph: BackendGraph;
 };
 

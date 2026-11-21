@@ -232,4 +232,23 @@ export const fallbackNodeCatalog: NodeTypeSpec[] = [
       },
     },
   },
+  {
+    type: 'notify.email',
+    label: 'Email',
+    group: 'notify',
+    inputs: [
+      { name: 'report', kind: 'Report' },
+      { name: 'in', kind: 'Any' },
+    ],
+    outputs: [{ name: 'out', kind: 'Any' }],
+    params_schema: {
+      type: 'object',
+      properties: {
+        to_email: { type: 'string', default: '' },
+        subject: { type: 'string', default: 'FloraByte Security Report' },
+        credential_id: { type: 'string', default: '' },
+        dry_run: { type: 'boolean', default: false },
+      },
+    },
+  },
 ];

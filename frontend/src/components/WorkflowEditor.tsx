@@ -251,7 +251,7 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const pollTimerRef = useRef<number | null>(null);
-  const { deleteElements, screenToFlowPosition } = useReactFlow();
+  const { deleteElements, screenToFlowPosition, fitView } = useReactFlow();
 
   const stopPolling = useCallback(() => {
     if (pollTimerRef.current !== null) {
@@ -641,7 +641,13 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
       setEdges(conv.edges);
       setWorkflowId(null);
       setWorkflowName(gen.name || 'AI Workflow');
-      setStatusMsg(`Сценарий сгенерирован (режим: ${gen.mode}).`);
+      const modeLabel = gen.mode === 'llm' ? `LLM (${gen.provider || 'AI'})` : 'интеллектуальный разбор';
+      setStatusMsg(
+        `Сценарий создан (${modeLabel})${gen.summary ? `: ${gen.summary}` : '.'}`,
+      );
+      requestAnimationFrame(() => {
+        void fitView({ padding: 0.2, duration: 300 });
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setStatusMsg(`Ошибка генерации сценария: ${msg}`);
@@ -700,6 +706,15 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
     );
     if (unconfiguredTg) {
       return 'Блок Telegram на схеме не настроен: задайте Bot Token и chat_id один раз в разделе «Интеграции» (или удалите блок).';
+    }
+    const unconfiguredEmail = nodes.find(
+      (n) =>
+        n.data.kind === 'notify.email' &&
+        !n.data.params?.dry_run &&
+        !String(n.data.params?.to_email ?? '').trim(),
+    );
+    if (unconfiguredEmail) {
+      return 'У блока Email не указан адрес получателя (to_email). Укажите email в параметрах блока или включите dry_run.';
     }
     // Mirror the backend validation so invalid graphs are rejected before saving.
     for (const edge of edges) {
