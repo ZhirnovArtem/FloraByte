@@ -17,6 +17,7 @@ from app.api.ai_generator import router as ai_generator_router
 from app.api.auth import router as auth_router
 from app.api.ci import router as ci_router
 from app.api.credentials import router as credentials_router
+from app.api.custom_nodes import router as custom_nodes_router
 from app.api.integrations import router as integrations_router
 from app.api.node_types import router as node_types_router
 from app.api.runs import router as runs_router
@@ -91,6 +92,7 @@ app.include_router(templates_router)
 app.include_router(ci_router)
 app.include_router(ai_generator_router)
 app.include_router(integrations_router)
+app.include_router(custom_nodes_router)
 
 
 def _origin_allowed(origin: str, request: Request, allowed_origins: list[str]) -> bool:

@@ -4,6 +4,8 @@ import type {
   AuthStatusDto,
   BackendGraph,
   CredentialDto,
+  CustomNodeDto,
+  CustomNodeValidateDto,
   FindingDto,
   GeneratedWorkflowDto,
   IntegrationsDto,
@@ -279,6 +281,90 @@ export async function generateAiWorkflow(prompt: string): Promise<GeneratedWorkf
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Custom Nodes ("Мои ноды")
+// ---------------------------------------------------------------------------
+
+export async function listCustomNodes(): Promise<CustomNodeDto[]> {
+  const data = await requestJson<{ custom_nodes: CustomNodeDto[] }>('/api/custom-nodes');
+  return data.custom_nodes;
+}
+
+export async function getCustomNode(id: string): Promise<CustomNodeDto> {
+  return requestJson<CustomNodeDto>(`/api/custom-nodes/${id}`);
+}
+
+export async function validateCustomNodeCode(code: string): Promise<CustomNodeValidateDto> {
+  return requestJson<CustomNodeValidateDto>('/api/custom-nodes/validate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+}
+
+export async function createCustomNode(payload: {
+  name: string;
+  description: string;
+  group: string;
+  code: string;
+  inputs: { name: string; kind: string }[];
+  outputs: { name: string; kind: string }[];
+  params_schema: Record<string, unknown>;
+  status: string;
+  visibility: string;
+}): Promise<CustomNodeDto> {
+  return requestJson<CustomNodeDto>('/api/custom-nodes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateCustomNode(
+  id: string,
+  payload: Partial<{
+    name: string;
+    description: string;
+    group: string;
+    code: string;
+    inputs: { name: string; kind: string }[];
+    outputs: { name: string; kind: string }[];
+    params_schema: Record<string, unknown>;
+    status: string;
+    visibility: string;
+  }>,
+): Promise<CustomNodeDto> {
+  return requestJson<CustomNodeDto>(`/api/custom-nodes/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function duplicateCustomNode(id: string): Promise<CustomNodeDto> {
+  return requestJson<CustomNodeDto>(`/api/custom-nodes/${id}/duplicate`, { method: 'POST' });
+}
+
+export async function testRunCustomNode(
+  id: string,
+  payload: {
+    code?: string;
+    inputs: Record<string, unknown>;
+    params: Record<string, unknown>;
+    outputs?: { name: string; kind: string }[];
+  },
+): Promise<{ ok: boolean; output?: Record<string, unknown>; logs?: string[]; error?: string }> {
+  return requestJson(`/api/custom-nodes/${id}/test-run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteCustomNode(id: string): Promise<void> {
+  await requestJson<{ ok: boolean }>(`/api/custom-nodes/${id}`, { method: 'DELETE' });
 }
 
 export async function getIntegrations(): Promise<IntegrationsDto> {

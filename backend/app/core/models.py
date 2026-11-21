@@ -224,3 +224,40 @@ class PasswordResetToken(SQLModel, table=True):
     expires_at: datetime
     used: bool = False
     created_at: datetime = SQLField(default_factory=_utcnow)
+
+
+class CustomNode(SQLModel, table=True):
+    __tablename__ = "custom_nodes"
+
+    id: str = SQLField(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    owner_id: str | None = SQLField(default=None, index=True)
+    node_type: str = SQLField(index=True, unique=True)
+    name: str
+    description: str = ""
+    group: str = "custom"
+    code: str
+    inputs_json: list[dict[str, Any]] = SQLField(default_factory=list, sa_column=Column(JSON))
+    outputs_json: list[dict[str, Any]] = SQLField(default_factory=list, sa_column=Column(JSON))
+    params_schema_json: dict[str, Any] = SQLField(default_factory=dict, sa_column=Column(JSON))
+    version: int = 1
+    status: str = "active"  # draft | active | disabled
+    visibility: str = "private"  # private | public
+    created_at: datetime = SQLField(default_factory=_utcnow)
+    updated_at: datetime = SQLField(default_factory=_utcnow)
+
+
+class CustomNodeVersion(SQLModel, table=True):
+    __tablename__ = "custom_node_versions"
+
+    id: str = SQLField(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    custom_node_id: str = SQLField(index=True)
+    version: int
+    name: str
+    description: str = ""
+    group: str = "custom"
+    code: str
+    inputs_json: list[dict[str, Any]] = SQLField(default_factory=list, sa_column=Column(JSON))
+    outputs_json: list[dict[str, Any]] = SQLField(default_factory=list, sa_column=Column(JSON))
+    params_schema_json: dict[str, Any] = SQLField(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = SQLField(default_factory=_utcnow)
+

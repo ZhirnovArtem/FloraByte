@@ -45,7 +45,6 @@ APP_SECRET_KEY
 /secrets/
 *.key
 *.pem
-!backend/app/nodes/ai/certs/russian_trusted_ca.pem
 
 # Логи и IDE
 *.log

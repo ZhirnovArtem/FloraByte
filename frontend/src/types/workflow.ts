@@ -32,10 +32,55 @@ export type ParamsSchema = {
 export type NodeTypeSpec = {
   type: string;
   label: string;
+  description?: string;
   group: string;
   inputs: PortSpec[];
   outputs: PortSpec[];
   params_schema: ParamsSchema;
+  is_custom?: boolean;
+  custom_node_id?: string;
+  version?: number;
+  visibility?: string;
+};
+
+export type CustomNodeVersionDto = {
+  id: string;
+  version: number;
+  name: string;
+  description: string;
+  group: string;
+  code: string;
+  inputs: PortSpec[];
+  outputs: PortSpec[];
+  params_schema: ParamsSchema;
+  created_at?: string | null;
+};
+
+export type CustomNodeDto = {
+  id: string;
+  node_type: string;
+  owner_id?: string | null;
+  is_owner: boolean;
+  name: string;
+  description: string;
+  group: string;
+  code: string;
+  inputs: PortSpec[];
+  outputs: PortSpec[];
+  params_schema: ParamsSchema;
+  version: number;
+  status: 'draft' | 'active' | 'disabled' | string;
+  visibility: 'private' | 'public' | string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  versions?: CustomNodeVersionDto[];
+};
+
+export type CustomNodeValidateDto = {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+  is_async: boolean;
 };
 
 export type BackendGraphNode = {

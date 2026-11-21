@@ -25,6 +25,7 @@ from app.engine.graph import (
     validate_graph,
 )
 from app.nodes.base import NodeContext
+from app.nodes.custom_manager import CustomNodeRuntimeAdapter, build_effective_registry
 from app.nodes.registry import NODE_REGISTRY, get_node_class
 
 logger = logging.getLogger(__name__)
@@ -71,13 +72,15 @@ class Executor:
         owner_id: str | None = None,
     ) -> str:
         settings = get_settings()
-        try:
-            validate_graph(graph, NODE_REGISTRY)
-        except GraphError as e:
-            raise ValueError(str(e)) from e
 
         run_id = None
         with self.session_factory() as session:
+            eff_registry = build_effective_registry(session, owner_id=owner_id, graph=graph)
+            try:
+                validate_graph(graph, eff_registry)
+            except GraphError as e:
+                raise ValueError(str(e)) from e
+
             run = Run(workflow_id=workflow_id, owner_id=owner_id, status="pending", trigger=trigger)
             session.add(run)
             session.commit()
@@ -148,6 +151,8 @@ class Executor:
         owner_id: str | None = None,
     ) -> None:
         settings = get_settings()
+        with self.session_factory() as session:
+            eff_registry = build_effective_registry(session, owner_id=owner_id, graph=graph)
         order = topological_order(graph)
         nodes = {n["id"]: n for n in graph.get("nodes", [])}
 
@@ -156,6 +161,7 @@ class Executor:
         # which output ports were activated (for branching)
         active_ports: dict[str, set[str]] = {}
         node_status: dict[str, str] = {nid: "pending" for nid in nodes}
+        custom_node_versions: dict[str, dict[str, Any]] = {}
 
         # For skipped propagation: edge is active if source succeeded or declares continue_downstream_on_error
         def edge_active(e: dict) -> bool:
@@ -164,10 +170,8 @@ class Executor:
                 src_type = (nodes.get(src) or {}).get("type")
                 allow_err = False
                 if src_type and src in outputs:
-                    try:
-                        allow_err = bool(get_node_class(src_type).continue_downstream_on_error)
-                    except KeyError:
-                        allow_err = False
+                    cls_src = eff_registry.get(src_type)
+                    allow_err = bool(getattr(cls_src, "continue_downstream_on_error", False)) if cls_src else False
                 if not allow_err:
                     return False
             ports = active_ports.get(src)
@@ -235,10 +239,17 @@ class Executor:
             await event_bus.emit(run_id, {"event": "node_started", "node_id": node_id, "status": "running"})
 
             try:
-                cls = get_node_class(node["type"])
+                cls = eff_registry.get(node["type"]) or get_node_class(node["type"])
                 instance = cls()
                 params_data = node.get("params") or node.get("data", {}).get("params") or {}
                 params = cls.Params.model_validate(params_data)
+                if isinstance(cls, CustomNodeRuntimeAdapter):
+                    custom_node_versions[node_id] = {
+                        "custom_node_id": cls.custom_node_id,
+                        "node_type": cls.type,
+                        "name": cls.label,
+                        "version": cls.version,
+                    }
 
                 ctx = NodeContext(
                     run_id=run_id,
@@ -267,6 +278,8 @@ class Executor:
                 finished = _utcnow()
                 duration_ms = int((finished - started).total_seconds() * 1000)
                 preview = _preview(result)
+                if node_id in custom_node_versions:
+                    preview = {**(preview or {}), "custom_node": custom_node_versions[node_id]}
 
                 # If a node with continue_downstream_on_error returned an error report, record node as failed
                 # while still propagating its output downstream (e.g. scan findings to Export Report).
@@ -345,6 +358,8 @@ class Executor:
 
         # Collect summary findings if any export produced report, and ai_report if ai.explain ran
         summary: dict[str, Any] = {"node_statuses": node_status}
+        if custom_node_versions:
+            summary["custom_nodes"] = custom_node_versions
         ai_report: dict[str, Any] | None = None
         for out in outputs.values():
             if "report" in out and isinstance(out["report"], dict):

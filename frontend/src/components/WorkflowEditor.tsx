@@ -20,6 +20,7 @@ import NodeSettings from './NodeSettings';
 import ReportPanel from './ReportPanel';
 import IntegrationsModal from './IntegrationsModal';
 import SettingsModal from './SettingsModal';
+import CustomNodesModal from './CustomNodesModal';
 import { fallbackNodeCatalog } from '../config/nodeCatalog';
 import * as api from '../api/client';
 import { connectionError, safeGraphForLocalStorage } from '../utils/graphValidation';
@@ -229,6 +230,7 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
   const [integrations, setIntegrations] = useState<IntegrationsDto>(DEFAULT_INTEGRATIONS);
   const [integrationsOpen, setIntegrationsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [customNodesOpen, setCustomNodesOpen] = useState(false);
 
   const [workflowId, setWorkflowId] = useState<string | null>(null);
   const [workflowName, setWorkflowName] = useState<string>('Security Workflow');
@@ -891,6 +893,24 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
           </button>
 
           <button
+            type="button"
+            onClick={() => setCustomNodesOpen(true)}
+            style={{
+              padding: '7px 12px',
+              background: '#7c3aed',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 7,
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+            title="Создать и управлять собственными нодами"
+          >
+            Мои ноды
+          </button>
+
+          <button
             onClick={() => void saveWorkflow()}
             style={{
               padding: '7px 12px',
@@ -1115,6 +1135,24 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
               setNodes(rebuilt.nodes);
               setEdges(rebuilt.edges);
             }
+          }}
+        />
+      )}
+
+      {customNodesOpen && (
+        <CustomNodesModal
+          onClose={() => setCustomNodesOpen(false)}
+          onCatalogChanged={async () => {
+            const fresh = await api.fetchNodeTypes().catch(() => []);
+            if (fresh.length > 0) setCatalog(fresh);
+          }}
+          onAddToCanvas={(nodeType) => {
+            void (async () => {
+              const fresh = await api.fetchNodeTypes().catch(() => catalog);
+              if (fresh.length > 0) setCatalog(fresh);
+              const spec = fresh.find((s) => s.type === nodeType) ?? specByType.get(nodeType);
+              if (spec) addNode(spec);
+            })();
           }}
         />
       )}

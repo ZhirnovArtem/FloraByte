@@ -18,9 +18,10 @@ const GROUP_LABELS: Record<string, string> = {
   findings: 'Сборка и отчёты',
   ai: 'AI-анализ',
   notify: 'Уведомления',
+  custom: 'Мои ноды',
 };
 
-const GROUP_ORDER = ['trigger', 'source', 'scanner', 'logic', 'findings', 'ai', 'notify'];
+const GROUP_ORDER = ['trigger', 'source', 'scanner', 'logic', 'findings', 'ai', 'notify', 'custom'];
 
 export default function NodeSidebar({
   catalog,
@@ -194,7 +195,23 @@ export default function NodeSidebar({
               }}
               title="Нажмите или перетащите блок на схему"
             >
-              <strong style={{ fontSize: 13 }}>{item.label}</strong>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                <strong style={{ fontSize: 13 }}>{item.label}</strong>
+                {item.is_custom && (
+                  <span
+                    style={{
+                      fontSize: 10,
+                      padding: '1px 6px',
+                      borderRadius: 999,
+                      background: '#ede9fe',
+                      color: '#5b21b6',
+                      fontWeight: 700,
+                    }}
+                  >
+                    v{item.version ?? 1}
+                  </span>
+                )}
+              </div>
               <div style={{ fontSize: 11, color: '#64748b', marginTop: 2, fontFamily: 'monospace' }}>
                 {item.type}
               </div>

@@ -13,7 +13,7 @@ from app.core.models import User, Workflow
 from app.engine.executor import Executor
 from app.engine.graph import GraphError, validate_graph
 from app.engine.scheduler import reload_schedules
-from app.nodes.registry import NODE_REGISTRY
+from app.nodes.custom_manager import build_effective_registry
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
@@ -68,7 +68,8 @@ def create_workflow(
     graph = body.graph or {}
     if graph.get("nodes"):
         try:
-            validate_graph(graph, NODE_REGISTRY)
+            eff_registry = build_effective_registry(session, owner_id=user.id if user else None, graph=graph)
+            validate_graph(graph, eff_registry)
         except GraphError as e:
             raise HTTPException(400, str(e)) from e
     w = Workflow(
@@ -113,7 +114,8 @@ def update_workflow(
         w.name = body.name
     if body.graph is not None:
         try:
-            validate_graph(body.graph, NODE_REGISTRY)
+            eff_registry = build_effective_registry(session, owner_id=user.id if user else None, graph=body.graph)
+            validate_graph(body.graph, eff_registry)
         except GraphError as e:
             raise HTTPException(400, str(e)) from e
         w.graph_json = body.graph
