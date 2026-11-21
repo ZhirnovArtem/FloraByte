@@ -26,13 +26,23 @@ def is_production_env() -> bool:
     return False
 
 
+def _get_env_secret_key() -> str:
+    direct = os.environ.get("APP_SECRET_KEY", "").strip()
+    if direct:
+        return direct
+    for key, value in os.environ.items():
+        if key.upper() == "APP_SECRET_KEY" and value.strip():
+            return value.strip()
+    return ""
+
+
 def encryption_key_source() -> str:
     """Return 'env' when APP_SECRET_KEY is configured in environment, otherwise 'file'."""
-    return "env" if os.environ.get("APP_SECRET_KEY", "").strip() else "file"
+    return "env" if _get_env_secret_key() else "file"
 
 
 def _load_or_create_key() -> bytes:
-    env_key = os.environ.get("APP_SECRET_KEY", "").strip()
+    env_key = _get_env_secret_key()
     if env_key:
         raw = env_key.encode("ascii", errors="strict")
         try:
