@@ -62,6 +62,22 @@ const DEFAULT_INTEGRATIONS: IntegrationsDto = {
 const STORAGE_KEY = 'florabyte-workflow';
 const ACTIVE_RUN_KEY = 'florabyte-active-run-id';
 const TERMINAL_RUN_STATUSES = new Set(['success', 'failed', 'partial']);
+const MAX_ZIP_NAME_CHARS = 22;
+
+function formatZipLabel(filename: string): string {
+  const chars = Array.from(filename);
+  if (chars.length <= MAX_ZIP_NAME_CHARS) {
+    return `ZIP: ${filename}`;
+  }
+  const dotIdx = filename.lastIndexOf('.');
+  if (dotIdx > 0 && filename.length - dotIdx <= 6) {
+    const ext = filename.slice(dotIdx);
+    const baseChars = Array.from(filename.slice(0, dotIdx));
+    const keepStart = Math.max(6, MAX_ZIP_NAME_CHARS - Array.from(ext).length - 1);
+    return `ZIP: ${baseChars.slice(0, keepStart).join('')}…${ext}`;
+  }
+  return `ZIP: ${chars.slice(0, MAX_ZIP_NAME_CHARS - 1).join('')}…`;
+}
 
 const nodeTypes = {
   security: SecurityNode,
@@ -808,7 +824,13 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <label
+            title={lastUpload ? lastUpload.filename : 'Загрузить .zip архив'}
             style={{
+              display: 'inline-block',
+              maxWidth: 'min(210px, 48vw)',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
               padding: '7px 12px',
               background: '#0284c7',
               color: '#fff',
@@ -816,9 +838,10 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
               cursor: 'pointer',
               fontSize: 12,
               fontWeight: 600,
+              flexShrink: 0,
             }}
           >
-            {lastUpload ? `ZIP: ${lastUpload.filename}` : 'Загрузить ZIP'}
+            {lastUpload ? formatZipLabel(lastUpload.filename) : 'Загрузить ZIP'}
             <input
               type="file"
               accept=".zip"
