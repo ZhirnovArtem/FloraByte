@@ -57,6 +57,50 @@ async function rawFetch(url: string, init?: RequestInit): Promise<Response> {
   return res;
 }
 
+const _recentLogErrors = new Map<string, number>();
+
+export function reportClientError(payload: {
+  level?: 'error' | 'warning' | 'info';
+  message: string;
+  source?: string;
+  url?: string;
+  status?: number;
+  stack?: string;
+}): void {
+  try {
+    const msg = (payload.message || '').slice(0, 1800);
+    if (!msg) return;
+    const dedupKey = `${payload.source || 'browser'}:${payload.status || ''}:${msg.slice(0, 120)}`;
+    const now = Date.now();
+    const prev = _recentLogErrors.get(dedupKey) || 0;
+    if (now - prev < 5000) return;
+    _recentLogErrors.set(dedupKey, now);
+    if (_recentLogErrors.size > 100) {
+      const oldest = _recentLogErrors.keys().next().value;
+      if (oldest) _recentLogErrors.delete(oldest);
+    }
+
+    const body = JSON.stringify({
+      level: payload.level || 'error',
+      message: msg,
+      source: (payload.source || 'browser').slice(0, 120),
+      url: (payload.url || (typeof window !== 'undefined' ? window.location.pathname : '')).slice(0, 500),
+      status: payload.status,
+      stack: (payload.stack || '').slice(0, 3500),
+    });
+
+    void fetch(`${API_BASE_URL}/api/logs/client-error`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      keepalive: true,
+    }).catch(() => undefined);
+  } catch {
+    // never throw from error reporter
+  }
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await rawFetch(url, init);
   if (!res.ok) {
@@ -66,6 +110,15 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
       if (body?.detail) detail = body.detail;
     } catch {
       // ignore parse failure
+    }
+    if (!url.startsWith('/api/logs/') && res.status !== 401) {
+      reportClientError({
+        level: res.status >= 500 ? 'error' : 'warning',
+        source: 'frontend-api',
+        message: `${init?.method || 'GET'} ${url}: ${detail}`,
+        url,
+        status: res.status,
+      });
     }
     throw new Error(detail);
   }
@@ -465,4 +518,20 @@ export async function sendRunToTelegram(runId: string): Promise<{ sent: boolean;
     `/api/integrations/telegram/send-run/${encodeURIComponent(runId)}`,
     { method: 'POST' },
   );
+}
+
+export type LogTailDto = {
+  kind: 'errors' | 'app';
+  file_name: string;
+  path: string;
+  entries: string[];
+  total_returned: number;
+};
+
+export async function getLogs(kind: 'errors' | 'app' = 'errors', lines = 150): Promise<LogTailDto> {
+  return requestJson<LogTailDto>(`/api/logs?kind=${encodeURIComponent(kind)}&lines=${lines}`);
+}
+
+export function getLogDownloadUrl(kind: 'errors' | 'app' = 'errors'): string {
+  return `${API_BASE_URL}/api/logs/download?kind=${encodeURIComponent(kind)}`;
 }

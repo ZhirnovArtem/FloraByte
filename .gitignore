@@ -48,6 +48,8 @@ APP_SECRET_KEY
 
 # Логи и IDE
 *.log
+/logs/
+logs/
 .DS_Store
 .idea/
 .vscode/

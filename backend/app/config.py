@@ -13,6 +13,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_TMP = Path(tempfile.gettempdir()) if os.name == "nt" else Path("/tmp")
 _BACKEND_ENV = Path(__file__).resolve().parents[1] / ".env"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_LOG_DIR = (_REPO_ROOT / "logs") if (_REPO_ROOT / "backend").is_dir() else Path("logs")
 
 
 class Settings(BaseSettings):
@@ -28,6 +30,11 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./ai_security_workflow.db"
     runs_dir: Path = _DEFAULT_TMP / ("florabyte_runs" if os.name == "nt" else "runs")
     upload_dir: Path = _DEFAULT_TMP / ("florabyte_uploads" if os.name == "nt" else "uploads")
+    log_dir: Path = Field(default=_DEFAULT_LOG_DIR, validation_alias="LOG_DIR")
+    log_file_name: str = Field(default="florabyte.log", validation_alias="LOG_FILE_NAME")
+    error_log_file_name: str = Field(default="errors.log", validation_alias="ERROR_LOG_FILE_NAME")
+    log_max_bytes: int = Field(default=5 * 1024 * 1024, validation_alias="LOG_MAX_BYTES")
+    log_backup_count: int = Field(default=5, validation_alias="LOG_BACKUP_COUNT")
     node_timeout_sec: int = 120
     use_stub_scanners: bool = Field(default=False, validation_alias="USE_STUB_SCANNERS")
 

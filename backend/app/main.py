@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
+import time
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
@@ -19,6 +21,7 @@ from app.api.ci import router as ci_router
 from app.api.credentials import router as credentials_router
 from app.api.custom_nodes import router as custom_nodes_router
 from app.api.integrations import router as integrations_router
+from app.api.logs import router as logs_router
 from app.api.node_types import router as node_types_router
 from app.api.runs import router as runs_router
 from app.api.templates import router as templates_router
@@ -93,6 +96,7 @@ app.include_router(ci_router)
 app.include_router(ai_generator_router)
 app.include_router(integrations_router)
 app.include_router(custom_nodes_router)
+app.include_router(logs_router)
 
 
 def _origin_allowed(origin: str, request: Request, allowed_origins: list[str]) -> bool:
@@ -113,7 +117,7 @@ async def protect_workflow_api(request: Request, call_next):
     if request.method == "OPTIONS" or not path.startswith("/api/"):
         return await call_next(request)
 
-    if path.startswith("/api/auth/") or path.startswith("/api/ci/"):
+    if path.startswith("/api/auth/") or path.startswith("/api/ci/") or path == "/api/logs/client-error":
         return await call_next(request)
 
     settings = get_settings()
@@ -155,6 +159,37 @@ async def protect_workflow_api(request: Request, call_next):
         return await call_next(request)
 
     return JSONResponse({"detail": "Требуется авторизация"}, status_code=401)
+
+
+_http_logger = logging.getLogger("app.http")
+
+
+@app.middleware("http")
+async def log_requests_and_errors(request: Request, call_next):
+    """Write HTTP access & error logs (with secret redaction) to rotating log files."""
+    started = time.perf_counter()
+    path = request.url.path
+    method = request.method
+    fwd = request.headers.get("x-forwarded-for", "")
+    client_ip = fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "-")
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        _http_logger.exception("Unhandled error %s %s ip=%s %.1fms", method, path, client_ip, elapsed_ms)
+        return JSONResponse({"detail": "Internal Server Error"}, status_code=500)
+
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    user = getattr(request.state, "user", None)
+    uid = getattr(user, "id", "-") if user is not None else "-"
+    status = response.status_code
+    if status >= 500:
+        _http_logger.error("%s %s -> %d user=%s ip=%s %.1fms", method, path, status, uid, client_ip, elapsed_ms)
+    elif status >= 400:
+        _http_logger.warning("%s %s -> %d user=%s ip=%s %.1fms", method, path, status, uid, client_ip, elapsed_ms)
+    elif path != "/health":
+        _http_logger.info("%s %s -> %d user=%s ip=%s %.1fms", method, path, status, uid, client_ip, elapsed_ms)
+    return response
 
 
 @app.get("/health")
