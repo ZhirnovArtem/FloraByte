@@ -151,9 +151,11 @@ def evaluate(report: dict, truth: dict) -> dict[str, Any]:
     tp = len(matched_truth)
     fn = len(missed)
     fp_controls = len(control_hits)
-    # precision/recall relative to ground-truth findings (controls counted separately)
+    extra_preds = [p for i, p in enumerate(preds) if i not in used_pred]
+    # precision/recall relative to ground-truth findings (controls + unmatched extras tracked explicitly)
     recall = tp / len(findings) if findings else 1.0
-    precision = tp / (tp + fp_controls) if (tp + fp_controls) else (1.0 if tp == 0 and not preds else 0.0)
+    denom = tp + fp_controls + len(extra_preds)
+    precision = tp / denom if denom else (1.0 if tp == 0 and not preds else 0.0)
 
     return {
         "total_truth": len(findings),
@@ -162,6 +164,7 @@ def evaluate(report: dict, truth: dict) -> dict[str, Any]:
         "missed": missed,
         "matched_ids": matched_truth,
         "control_hits": control_hits,
+        "extra_preds": extra_preds,
         "precision": round(precision, 4),
         "recall": round(recall, 4),
         "passed": fn == 0 and fp_controls == 0,
@@ -189,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Control hits (false positives): {len(result['control_hits'])}")
     for h in result["control_hits"]:
         print(f"  - FP control {h.get('control_id')}: {h.get('reason')}")
+    print(f"Extra unmatched preds: {len(result.get('extra_preds') or [])}")
     print(f"Precision: {result['precision']}  Recall: {result['recall']}")
     print("PASS" if result["passed"] else "FAIL")
 

@@ -52,7 +52,14 @@ def mutate_string_literals(root: Path, rng: random.Random) -> list[str]:
 
         def repl(m: re.Match) -> str:
             inner = m.group(1)
-            if len(inner) < 6 or rng.random() > 0.4:
+            if (
+                len(inner) < 6
+                or rng.random() > 0.4
+                or "$" in inner
+                or inner.startswith("/")
+                or "SELECT " in inner.upper()
+                or "YOUR_" in inner
+            ):
                 return m.group(0)
             flipped = inner[:-2] + _rand_suffix(2)
             notes.append(f"literal in {f.name}")

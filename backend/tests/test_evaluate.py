@@ -66,3 +66,39 @@ def test_evaluate_control_fp():
     r = evaluate(report, truth)
     assert len(r["control_hits"]) == 1
     assert r["passed"] is False
+
+
+def test_evaluate_cli_exit_codes_and_mutation(tmp_path):
+    from tools.evaluate import main as eval_main
+    from tools.mutate_project import mutate_once
+
+    truth_path = tmp_path / "truth.json"
+    report_ok = tmp_path / "ok.json"
+    report_miss = tmp_path / "miss.json"
+    truth_path.write_text(
+        json.dumps(
+            {
+                "findings": [
+                    {"id": "1", "category": "SECRET", "class": "password", "path": "x.kt", "line": 2, "endLine": 2}
+                ],
+                "controls": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    report_ok.write_text(
+        json.dumps({"findings": [{"category": "SECRET", "class": "password", "path": "x.kt", "line": 2}]}),
+        encoding="utf-8",
+    )
+    report_miss.write_text(json.dumps({"findings": []}), encoding="utf-8")
+
+    assert eval_main(["--report", str(report_ok), "--truth", str(truth_path)]) == 0
+    assert eval_main(["--report", str(report_miss), "--truth", str(truth_path)]) == 1
+
+    src = tmp_path / "src_proj"
+    (src / "src" / "main" / "kotlin").mkdir(parents=True)
+    (src / "build.gradle.kts").write_text('dependencies { implementation("org.apache.commons:commons-text:1.9") }\n')
+    (src / "src" / "main" / "kotlin" / "App.kt").write_text('fun demo() { val secretVal = "my_secret_123456" }\n')
+    dst = tmp_path / "mut_proj"
+    notes = mutate_once(src, dst, seed=7)
+    assert notes and (dst / "build.gradle.kts").is_file()
