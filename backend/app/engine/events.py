@@ -7,6 +7,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.masking import redact_payload
+
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -21,12 +23,12 @@ class EventBus:
         self._lock = asyncio.Lock()
 
     async def emit(self, run_id: str, event: dict[str, Any]) -> None:
-        event = {**event, "run_id": run_id, "ts": event.get("ts") or _utcnow()}
+        safe_event = redact_payload({**event, "run_id": run_id, "ts": event.get("ts") or _utcnow()})
         async with self._lock:
-            self._history[run_id].append(event)
+            self._history[run_id].append(safe_event)
             for q in list(self._subs.get(run_id, [])):
                 try:
-                    q.put_nowait(event)
+                    q.put_nowait(safe_event)
                 except asyncio.QueueFull:
                     pass
 

@@ -45,7 +45,7 @@ def list_credentials(
 ):
     items = session.exec(select(Credential)).all()
     if user is not None:
-        items = [c for c in items if c.owner_id in (None, user.id)]
+        items = [c for c in items if c.owner_id == user.id]
     return {"credentials": [_public(c) for c in items]}
 
 

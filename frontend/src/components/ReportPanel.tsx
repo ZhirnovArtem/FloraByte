@@ -246,6 +246,30 @@ export default function ReportPanel({
         <div style={{ flex: 1, overflowY: 'auto', padding: 14 }}>
           {tab === 'findings' && (
             <div>
+              {run?.nodes && run.nodes.some((n) => n.status === 'failed') && (
+                <div
+                  style={{
+                    marginBottom: 10,
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    background: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    color: '#991b1b',
+                    fontSize: 12,
+                  }}
+                >
+                  <strong>Блоки с ошибками ({run.nodes.filter((n) => n.status === 'failed').length}):</strong>
+                  <ul style={{ margin: '4px 0 0 18px', padding: 0 }}>
+                    {run.nodes
+                      .filter((n) => n.status === 'failed')
+                      .map((n) => (
+                        <li key={n.node_id}>
+                          <code>{n.node_id}</code>: {n.error || 'ошибка выполнения'}
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 {['ALL', 'SECRET', 'SCA', 'SAST'].map((c) => (
                   <button
@@ -619,8 +643,48 @@ export default function ReportPanel({
 
           {tab === 'log' && (
             <div style={{ fontFamily: 'monospace', fontSize: 11 }}>
+              {run?.nodes && run.nodes.length > 0 && (
+                <div style={{ marginBottom: 12, fontFamily: 'system-ui, sans-serif' }}>
+                  <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6, color: '#0f172a' }}>
+                    Состояние блоков запуска ({run.id.slice(0, 8)}):
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {run.nodes.map((nr) => {
+                      const bg =
+                        nr.status === 'success'
+                          ? '#dcfce7'
+                          : nr.status === 'failed'
+                            ? '#fee2e2'
+                            : '#f1f5f9';
+                      const fg =
+                        nr.status === 'success'
+                          ? '#166534'
+                          : nr.status === 'failed'
+                            ? '#991b1b'
+                            : '#475569';
+                      return (
+                        <div
+                          key={nr.node_id}
+                          title={nr.error || nr.status}
+                          style={{
+                            padding: '4px 8px',
+                            borderRadius: 6,
+                            background: bg,
+                            color: fg,
+                            fontSize: 11,
+                            border: '1px solid #e2e8f0',
+                          }}
+                        >
+                          <strong>{nr.node_id}</strong>: {nr.status}
+                          {nr.error ? ` — ${nr.error}` : ''}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {events.length === 0 ? (
-                <div style={{ color: '#64748b' }}>Событий WebSocket пока нет.</div>
+                <div style={{ color: '#64748b' }}>Событий WebSocket в текущей сессии нет.</div>
               ) : (
                 events.map((ev, i) => (
                   <div key={i} style={{ padding: '2px 0', borderBottom: '1px solid #f1f5f9' }}>

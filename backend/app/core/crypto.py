@@ -14,6 +14,18 @@ def _key_file_path() -> Path:
     return Path.home() / ".florabyte" / "secret.key"
 
 
+def is_production_env() -> bool:
+    """Return True when running in a production / Render deployment environment."""
+    if os.environ.get("REQUIRE_APP_SECRET_KEY", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    if os.environ.get("RENDER", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    for var in ("ENVIRONMENT", "APP_ENV", "NODE_ENV"):
+        if os.environ.get(var, "").strip().lower() in ("production", "prod"):
+            return True
+    return False
+
+
 def encryption_key_source() -> str:
     """Return 'env' when APP_SECRET_KEY is configured in environment, otherwise 'file'."""
     return "env" if os.environ.get("APP_SECRET_KEY", "").strip() else "file"
@@ -31,6 +43,11 @@ def _load_or_create_key() -> bytes:
                 "(generate via `python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"`)"
             ) from e
         return raw
+
+    if is_production_env() and os.environ.get("ALLOW_EPHEMERAL_SECRET_KEY", "").strip().lower() not in ("1", "true", "yes"):
+        raise RuntimeError(
+            "APP_SECRET_KEY environment variable is required in production/Render so encrypted secrets survive restarts."
+        )
 
     key_file = _key_file_path()
     if key_file.exists():

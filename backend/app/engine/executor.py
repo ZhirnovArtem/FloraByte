@@ -115,7 +115,7 @@ class Executor:
                         run.summary_json = {"error": redact_text(str(e))}
                         session.add(run)
                         session.commit()
-                await event_bus.emit(run_id, {"event": "run_finished", "status": "failed", "error": str(e)})
+                await event_bus.emit(run_id, {"event": "run_finished", "status": "failed", "error": redact_text(str(e))})
             finally:
                 # Keep reports/ for API download; remove the rest of workspace on success
                 reports = workspace / "reports"

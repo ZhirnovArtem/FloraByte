@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 from app.config import get_settings
 from app.core.auth import SESSION_COOKIE_NAME, resolve_session_from_token
 from app.core.db import get_engine
+from app.core.masking import redact_payload
 from app.core.models import NodeRun, Run
 from app.engine.events import event_bus
 
@@ -85,7 +86,7 @@ def _replay_events_from_db(run_id: str) -> list[dict[str, Any]]:
                     "ts": run.finished_at.isoformat() if run.finished_at else None,
                 }
             )
-        return events
+        return redact_payload(events)
 
 
 @router.websocket("/ws/runs/{run_id}")

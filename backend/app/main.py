@@ -26,7 +26,7 @@ from app.api.workflows import router as workflows_router
 from app.api.ws import router as ws_router
 from app.config import get_settings
 from app.core.auth import SESSION_COOKIE_NAME, resolve_session_from_token
-from app.core.crypto import encryption_key_source
+from app.core.crypto import encryption_key_source, get_fernet
 from app.core.db import get_engine, init_db
 from app.core.logging import setup_logging
 from app.engine.scheduler import reload_schedules, set_run_callback, start_scheduler
@@ -36,6 +36,7 @@ from app.engine.scheduler import reload_schedules, set_run_callback, start_sched
 async def lifespan(app: FastAPI):
     setup_logging()
     get_settings()
+    get_fernet()
     if encryption_key_source() != "env":
         import logging
         logging.getLogger(__name__).warning(
@@ -156,9 +157,11 @@ async def protect_workflow_api(request: Request, call_next):
 
 @app.get("/health")
 def health():
+    db_url = get_settings().database_url.lower()
     return {
         "status": "ok",
         "phase": "F",
         "version": "1.0.0",
         "secret_key_source": encryption_key_source(),
+        "storage_backend": "postgresql" if "postgres" in db_url else "sqlite",
     }

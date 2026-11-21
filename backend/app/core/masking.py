@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import re
-from typing import Pattern
+from typing import Any, Pattern
 
 # Common patterns that look like secrets (used for log redaction and evidence masking)
 _TOKEN_PATTERNS: list[Pattern[str]] = [
-    re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd|pwd|bearer|authorization)\s*[:=]\s*['\"]?([^\s'\"\\]{8,})"),
-    re.compile(r"(?i)bearer\s+([a-z0-9\-_\.]{20,})"),
+    re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd|pwd|bearer|authorization|x-api-key|x-goog-api-key)\s*[:=]\s*['\"]?([^\s'\"\\]{8,})"),
+    re.compile(r"(?i)(?:bearer|basic)\s+([a-z0-9\-_\.+/=]{12,})"),
     re.compile(r"(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}"),
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(r"sk-(?:ant-|or-|proj-)?[A-Za-z0-9\-_]{16,}"),
     re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
     re.compile(r"AIza[0-9A-Za-z\-_]{20,}"),
     re.compile(r"(?:bot)?[0-9]{5,15}:[A-Za-z0-9_\-]{20,}"),  # Telegram Bot API token (with or without 'bot' prefix)
+    re.compile(r"(?<=://)[^\s:/@]+:([^\s/@]+)@"),  # URL-embedded credentials
 ]
 
 
@@ -53,3 +54,14 @@ def redact_text(text: str, known_secrets: list[str] | None = None) -> str:
     for pat in _TOKEN_PATTERNS:
         out = pat.sub(lambda m: (m.group(0)[: max(0, m.start(m.lastindex or 0) - m.start())] + "****") if m.lastindex else "****", out)
     return out
+
+
+def redact_payload(obj: Any, known_secrets: list[str] | None = None) -> Any:
+    """Recursively redact secrets inside nested dict/list payloads (e.g. WebSocket events)."""
+    if isinstance(obj, str):
+        return redact_text(obj, known_secrets)
+    if isinstance(obj, list):
+        return [redact_payload(item, known_secrets) for item in obj]
+    if isinstance(obj, dict):
+        return {k: redact_payload(v, known_secrets) for k, v in obj.items()}
+    return obj
