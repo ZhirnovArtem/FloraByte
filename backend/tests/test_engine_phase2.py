@@ -17,6 +17,7 @@ from app.engine.events import event_bus
 from app.main import app
 from app.nodes.base import BaseNode, NodeContext, Port
 from app.nodes.registry import NODE_REGISTRY, register_node
+from tests.conftest import authenticate_client
 
 
 @pytest.fixture()
@@ -32,6 +33,7 @@ def client(tmp_path):
     SQLModel.metadata.drop_all(get_engine())
     init_db()
     with TestClient(app) as c:
+        authenticate_client(c)
         yield c
 
 

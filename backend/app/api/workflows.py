@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
+from app.core.auth import check_owner, get_current_user
 from app.core.db import get_session
-from app.core.models import Workflow
+from app.core.models import User, Workflow
 from app.engine.executor import Executor
 from app.engine.graph import GraphError, validate_graph
 from app.engine.scheduler import reload_schedules
@@ -48,13 +49,22 @@ def _to_dict(w: Workflow) -> dict:
 
 
 @router.get("")
-def list_workflows(session: Session = Depends(get_session)):
+def list_workflows(
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
     items = session.exec(select(Workflow).where(Workflow.is_template == False)).all()  # noqa: E712
+    if user is not None:
+        items = [w for w in items if w.owner_id in (None, user.id)]
     return {"workflows": [_to_dict(w) for w in items]}
 
 
 @router.post("")
-def create_workflow(body: WorkflowCreate, session: Session = Depends(get_session)):
+def create_workflow(
+    body: WorkflowCreate,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
     graph = body.graph or {}
     if graph.get("nodes"):
         try:
@@ -66,6 +76,7 @@ def create_workflow(body: WorkflowCreate, session: Session = Depends(get_session
         graph_json=graph,
         description=body.description,
         is_template=body.is_template,
+        owner_id=user.id if user else None,
     )
     session.add(w)
     session.commit()
@@ -75,18 +86,29 @@ def create_workflow(body: WorkflowCreate, session: Session = Depends(get_session
 
 
 @router.get("/{workflow_id}")
-def get_workflow(workflow_id: str, session: Session = Depends(get_session)):
+def get_workflow(
+    workflow_id: str,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
     w = session.get(Workflow, workflow_id)
     if not w:
         raise HTTPException(404, "Workflow not found")
+    check_owner(w.owner_id, user)
     return _to_dict(w)
 
 
 @router.put("/{workflow_id}")
-def update_workflow(workflow_id: str, body: WorkflowUpdate, session: Session = Depends(get_session)):
+def update_workflow(
+    workflow_id: str,
+    body: WorkflowUpdate,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
     w = session.get(Workflow, workflow_id)
     if not w:
         raise HTTPException(404, "Workflow not found")
+    check_owner(w.owner_id, user)
     if body.name is not None:
         w.name = body.name
     if body.graph is not None:
@@ -108,10 +130,15 @@ def update_workflow(workflow_id: str, body: WorkflowUpdate, session: Session = D
 
 
 @router.delete("/{workflow_id}")
-def delete_workflow(workflow_id: str, session: Session = Depends(get_session)):
+def delete_workflow(
+    workflow_id: str,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
     w = session.get(Workflow, workflow_id)
     if not w:
         raise HTTPException(404, "Workflow not found")
+    check_owner(w.owner_id, user)
     session.delete(w)
     session.commit()
     reload_schedules(session)
@@ -123,10 +150,12 @@ async def run_workflow(
     workflow_id: str,
     wait: bool = False,
     session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
 ):
     w = session.get(Workflow, workflow_id)
     if not w:
         raise HTTPException(404, "Workflow not found")
+    check_owner(w.owner_id, user)
     if not w.graph_json or not w.graph_json.get("nodes"):
         raise HTTPException(400, "Workflow has empty graph")
 
@@ -143,6 +172,7 @@ async def run_workflow(
             graph=w.graph_json,
             trigger="manual",
             wait=wait,
+            owner_id=user.id if user else w.owner_id,
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e

@@ -15,6 +15,7 @@ import app.core.db as db_mod
 from app.config import get_settings
 from app.main import app
 from app.nodes.notify.telegram import normalize_bot_token
+from tests.conftest import authenticate_client
 
 
 @pytest.fixture()
@@ -37,6 +38,7 @@ def integ_client(tmp_path, monkeypatch):
     SQLModel.metadata.drop_all(db_mod.get_engine())
     db_mod.init_db()
     with TestClient(app) as client:
+        authenticate_client(client)
         yield client
     db_mod._engine = None
     get_settings.cache_clear()

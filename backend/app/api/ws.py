@@ -9,6 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlmodel import Session, select
 
 from app.config import get_settings
+from app.core.auth import SESSION_COOKIE_NAME, resolve_session_from_token
 from app.core.db import get_engine
 from app.core.models import NodeRun, Run
 from app.engine.events import event_bus
@@ -89,13 +90,37 @@ def _replay_events_from_db(run_id: str) -> list[dict[str, Any]]:
 
 @router.websocket("/ws/runs/{run_id}")
 async def ws_run_events(websocket: WebSocket, run_id: str):
-    expected = get_settings().workflow_access_token
-    if expected:
-        offered = websocket.scope.get("subprotocols") or []
-        if not any(p.startswith("auth.") and secrets.compare_digest(p[5:], expected) for p in offered):
+    settings = get_settings()
+    expected = settings.workflow_access_token
+    offered = websocket.scope.get("subprotocols") or []
+    raw_cookie = websocket.cookies.get(SESSION_COOKIE_NAME, "")
+
+    authed_user = None
+    service_auth = False
+
+    if raw_cookie:
+        with Session(get_engine()) as session:
+            resolved = resolve_session_from_token(session, raw_cookie)
+        if resolved:
+            _, authed_user = resolved
+
+    if not authed_user and expected:
+        if any(p.startswith("auth.") and secrets.compare_digest(p[5:], expected) for p in offered):
+            service_auth = True
+
+    if not authed_user and not service_auth:
+        if settings.auth_required or expected:
             await websocket.close(code=1008)
             return
-        # Pick a fixed subprotocol, do not echo credentials to the client.
+
+    if authed_user is not None:
+        with Session(get_engine()) as session:
+            run = session.get(Run, run_id)
+            if run and run.owner_id is not None and run.owner_id != authed_user.id:
+                await websocket.close(code=1008)
+                return
+
+    if service_auth:
         await websocket.accept(subprotocol="florabyte" if "florabyte" in offered else None)
     else:
         await websocket.accept()

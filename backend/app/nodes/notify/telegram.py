@@ -71,7 +71,7 @@ def _explain_telegram_http_error(status_code: int, description: str = "") -> str
     return f"Telegram API error HTTP {status_code}" + (f": {description}" if description else "")
 
 
-def _resolve_token_and_chat(params: Params) -> tuple[str, str]:
+def _resolve_token_and_chat(params: Params, owner_id: str | None = None) -> tuple[str, str]:
     settings = get_settings()
     token = normalize_bot_token(settings.telegram_bot_token)
     chat_id = (params.chat_id or settings.telegram_chat_id or "").strip()
@@ -91,7 +91,11 @@ def _resolve_token_and_chat(params: Params) -> tuple[str, str]:
         # Auto-resolve saved Telegram integration from DB if available
         try:
             with Session(get_engine()) as session:
-                integ = session.get(IntegrationSetting, "telegram")
+                integ = None
+                if owner_id:
+                    integ = session.get(IntegrationSetting, f"{owner_id}:telegram")
+                if integ is None:
+                    integ = session.get(IntegrationSetting, "telegram")
                 if integ and integ.enabled:
                     cfg = integ.config_json or {}
                     if not token and integ.encrypted_secret:
@@ -331,7 +335,7 @@ class TelegramNotifyNode(BaseNode):
                 }
             }
 
-        token, chat_id = _resolve_token_and_chat(params)
+        token, chat_id = _resolve_token_and_chat(params, owner_id=ctx.owner_id)
         out = await send_telegram_message(token, chat_id, text)
         logger.info("Telegram message sent to chat_id=%s for run=%s", chat_id, ctx.run_id)
         return {"out": out}

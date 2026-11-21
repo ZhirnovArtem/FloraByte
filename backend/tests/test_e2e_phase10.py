@@ -15,6 +15,7 @@ import app.core.db as db_mod
 from app.config import get_settings
 from app.engine.events import event_bus
 from app.main import app
+from tests.conftest import authenticate_client
 
 
 @pytest.fixture()
@@ -36,6 +37,7 @@ def e2e_env(tmp_path, monkeypatch):
     SQLModel.metadata.drop_all(db_mod.get_engine())
     db_mod.init_db()
     with TestClient(app) as client:
+        authenticate_client(client)
         yield client, db_file, tmp_path
     db_mod._engine = None
     get_settings.cache_clear()
@@ -130,6 +132,8 @@ def test_e2e_full_rerun_ws_and_restart_persistence(e2e_env):
     event_bus.clear(run1_id)
     db_mod._engine = None
     with TestClient(app) as restarted_client:
+        restarted_client.cookies.update(client.cookies)
+        restarted_client.headers.update(client.headers)
         hist_after = restarted_client.get("/api/runs").json()["runs"]
         assert any(r["id"] == run1_id for r in hist_after)
         assert len(restarted_client.get(f"/api/runs/{run1_id}/report.json").json()["findings"]) == len(rep1["findings"])

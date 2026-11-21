@@ -12,6 +12,7 @@ from sqlmodel import SQLModel
 import app.core.db as db_mod
 from app.config import get_settings
 from app.main import app
+from tests.conftest import authenticate_client
 
 
 @pytest.fixture()
@@ -32,6 +33,7 @@ def p12_client(tmp_path, monkeypatch):
     SQLModel.metadata.drop_all(db_mod.get_engine())
     db_mod.init_db()
     with TestClient(app) as client:
+        authenticate_client(client)
         yield client
     db_mod._engine = None
     get_settings.cache_clear()

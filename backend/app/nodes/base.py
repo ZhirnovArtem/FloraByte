@@ -26,6 +26,7 @@ class NodeContext(BaseModel):
     workspace: Any = None  # Path
     settings: Any = None
     emit: Any = None  # optional async callback for progress events
+    owner_id: str | None = None
 
 
 class BaseNode(ABC):

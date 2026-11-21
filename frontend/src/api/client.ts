@@ -1,5 +1,6 @@
 import type {
   AiIntegrationDto,
+  AuthStatusDto,
   BackendGraph,
   CredentialDto,
   FindingDto,
@@ -16,23 +17,45 @@ import type {
   WsRunEvent,
 } from '../types/workflow';
 
-const API_TOKEN_KEY = 'florabyte-workflow-api-token';
 const API_BASE_URL = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 
-export function setApiAccessToken(token: string): void {
-  if (token) sessionStorage.setItem(API_TOKEN_KEY, token);
-  else sessionStorage.removeItem(API_TOKEN_KEY);
+// Kept strictly in React/JS memory — never persisted in localStorage or sessionStorage.
+let csrfTokenMemory = '';
+let unauthorizedHandler: (() => void) | null = null;
+
+export function setOnUnauthorized(handler: (() => void) | null): void {
+  unauthorizedHandler = handler;
 }
 
-function authenticatedHeaders(extra?: HeadersInit): Headers {
+export function clearSessionMemory(): void {
+  csrfTokenMemory = '';
+}
+
+function requestHeaders(extra?: HeadersInit, method = 'GET'): Headers {
   const headers = new Headers(extra);
-  const token = sessionStorage.getItem(API_TOKEN_KEY);
-  if (token) headers.set('X-Workflow-Token', token);
+  const upper = method.toUpperCase();
+  if (csrfTokenMemory && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(upper)) {
+    headers.set('X-CSRF-Token', csrfTokenMemory);
+  }
   return headers;
 }
 
+async function rawFetch(url: string, init?: RequestInit): Promise<Response> {
+  const method = init?.method ?? 'GET';
+  const res = await fetch(`${API_BASE_URL}${url}`, {
+    ...init,
+    credentials: 'include',
+    headers: requestHeaders(init?.headers, method),
+  });
+  if (res.status === 401 && !url.startsWith('/api/auth/')) {
+    csrfTokenMemory = '';
+    unauthorizedHandler?.();
+  }
+  return res;
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${url}`, { ...init, headers: authenticatedHeaders(init?.headers) });
+  const res = await rawFetch(url, init);
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`;
     try {
@@ -44,6 +67,60 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(detail);
   }
   return (await res.json()) as T;
+}
+
+export async function fetchAuthMe(): Promise<AuthStatusDto> {
+  const data = await requestJson<AuthStatusDto>('/api/auth/me');
+  csrfTokenMemory = data.authenticated ? data.csrf_token || '' : '';
+  return data;
+}
+
+export async function loginUser(email: string, password: string): Promise<AuthStatusDto> {
+  const data = await requestJson<AuthStatusDto>('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  csrfTokenMemory = data.csrf_token || '';
+  return data;
+}
+
+export async function registerUser(email: string, password: string): Promise<AuthStatusDto> {
+  const data = await requestJson<AuthStatusDto>('/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  csrfTokenMemory = data.csrf_token || '';
+  return data;
+}
+
+export async function logoutUser(): Promise<void> {
+  try {
+    await requestJson<{ ok: boolean }>('/api/auth/logout', { method: 'POST' });
+  } finally {
+    csrfTokenMemory = '';
+  }
+}
+
+export async function forgotPassword(email: string): Promise<{ ok: boolean; message: string }> {
+  return requestJson<{ ok: boolean; message: string }>('/api/auth/forgot-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function resetPassword(
+  email: string,
+  token: string,
+  new_password: string,
+): Promise<{ ok: boolean; message: string }> {
+  return requestJson<{ ok: boolean; message: string }>('/api/auth/reset-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, token, new_password }),
+  });
 }
 
 export async function fetchNodeTypes(): Promise<NodeTypeSpec[]> {
@@ -124,9 +201,7 @@ export async function getReportJson(runId: string): Promise<{ findings: FindingD
 }
 
 export async function getReportMd(runId: string): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/api/runs/${encodeURIComponent(runId)}/report.md`, {
-    headers: authenticatedHeaders(),
-  });
+  const res = await rawFetch(`/api/runs/${encodeURIComponent(runId)}/report.md`);
   if (!res.ok) {
     throw new Error(`${res.status} ${res.statusText}`);
   }
@@ -159,9 +234,8 @@ export function subscribeRunEvents(
   const wsBaseUrl = API_BASE_URL
     ? API_BASE_URL.replace(/^http/, 'ws')
     : `${proto}//${window.location.host}`;
-  const token = sessionStorage.getItem(API_TOKEN_KEY);
-  const protocols = token ? ['florabyte', `auth.${token}`] : undefined;
-  const ws = new WebSocket(`${wsBaseUrl}/ws/runs/${encodeURIComponent(runId)}`, protocols);
+  // Browser sends the HttpOnly session cookie automatically on WS upgrade.
+  const ws = new WebSocket(`${wsBaseUrl}/ws/runs/${encodeURIComponent(runId)}`);
   ws.onmessage = (msg) => {
     try {
       const parsed = JSON.parse(String(msg.data)) as WsRunEvent;
@@ -179,9 +253,7 @@ export function subscribeRunEvents(
 }
 
 export async function downloadRunReport(runId: string, format: 'json' | 'md' | 'pdf'): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/runs/${encodeURIComponent(runId)}/report.${format}`, {
-    headers: authenticatedHeaders(),
-  });
+  const res = await rawFetch(`/api/runs/${encodeURIComponent(runId)}/report.${format}`);
   if (!res.ok) throw new Error(`Не удалось скачать отчёт: ${res.status}`);
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);

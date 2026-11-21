@@ -1,3 +1,15 @@
+export type AuthUserDto = {
+  id: string;
+  email: string;
+  created_at?: string | null;
+};
+
+export type AuthStatusDto = {
+  authenticated: boolean;
+  user: AuthUserDto | null;
+  csrf_token: string;
+};
+
 export type PortSpec = {
   name: string;
   kind: string;

@@ -44,9 +44,12 @@ class Settings(BaseSettings):
     # Vulnerability DB path (can be overridden per-node / replaced at final)
     vuln_db_path: Path = Path("vulnerability-database/vulnerabilities.json")
 
-    # Crypto
+    # Crypto & Auth
     app_secret_key: str = Field(default="", validation_alias="APP_SECRET_KEY")
-    workflow_access_token: str = ""  # optional bearer token for API + WebSocket on exposed demos
+    workflow_access_token: str = ""  # optional server-to-server integration token (never sent to browser)
+    auth_required: bool = Field(default=True, validation_alias="AUTH_REQUIRED")
+    session_ttl_days: int = Field(default=14, validation_alias="SESSION_TTL_DAYS")
+    cookie_secure: str = Field(default="auto", validation_alias="COOKIE_SECURE")  # auto | true | false
 
     # CORS (comma-separated origins)
     cors_allow_origins: str = Field(

@@ -7,11 +7,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
+from app.core.auth import get_current_user
 from app.core.db import get_session
-from app.core.models import Workflow
+from app.core.models import User, Workflow
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
 
@@ -67,7 +69,11 @@ def list_templates(session: Session = Depends(get_session)):
 
 
 @router.post("/{template_id}/copy")
-def copy_template(template_id: str, session: Session = Depends(get_session)):
+def copy_template(
+    template_id: str,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
     w = session.get(Workflow, template_id)
     if not w or not w.is_template:
         raise HTTPException(404, "Template not found")
@@ -77,6 +83,7 @@ def copy_template(template_id: str, session: Session = Depends(get_session)):
         description=w.description,
         graph_json=w.graph_json,
         is_template=False,
+        owner_id=user.id if user else None,
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )

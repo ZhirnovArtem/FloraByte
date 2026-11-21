@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from sqlmodel import Session, select
 
+from app.core.auth import check_owner, get_current_user
 from app.core.db import get_session
-from app.core.models import NodeRun, Run
+from app.core.models import NodeRun, Run, User
 from app.core.pdf_export import render_report_pdf
 from app.core.run_analytics import (
     build_severity_dashboard,
@@ -46,8 +48,14 @@ def _run_dict(r: Run, node_runs: list[NodeRun] | None = None) -> dict:
 
 
 @router.get("")
-def list_runs(session: Session = Depends(get_session), limit: int = 50):
+def list_runs(
+    session: Session = Depends(get_session),
+    limit: int = 50,
+    user: Optional[User] = Depends(get_current_user),
+):
     items = list(session.exec(select(Run).limit(500)).all())
+    if user is not None:
+        items = [r for r in items if r.owner_id in (None, user.id)]
     items.sort(key=lambda r: r.started_at or r.finished_at or r.id, reverse=True)
     items = items[:limit]
     return {"runs": [_run_dict(r) for r in items]}
@@ -58,11 +66,14 @@ def compare_two_runs(
     base: str = Query(..., description="Baseline run ID"),
     target: str = Query(..., description="Target run ID"),
     session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
 ):
     base_run = session.get(Run, base)
     target_run = session.get(Run, target)
     if not base_run or not target_run:
         raise HTTPException(404, "Run not found for comparison")
+    check_owner(base_run.owner_id, user)
+    check_owner(target_run.owner_id, user)
 
     base_findings = load_run_findings(base_run)
     target_findings = load_run_findings(target_run)
@@ -75,10 +86,15 @@ def compare_two_runs(
 
 
 @router.get("/{run_id}")
-def get_run(run_id: str, session: Session = Depends(get_session)):
+def get_run(
+    run_id: str,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
     r = session.get(Run, run_id)
     if not r:
         raise HTTPException(404, "Run not found")
+    check_owner(r.owner_id, user)
     nrs = session.exec(select(NodeRun).where(NodeRun.run_id == run_id)).all()
     out = _run_dict(r, list(nrs))
     out["dashboard"] = build_severity_dashboard(load_run_findings(r))
@@ -86,12 +102,19 @@ def get_run(run_id: str, session: Session = Depends(get_session)):
 
 
 @router.get("/{run_id}/dedup")
-def get_run_dedup(run_id: str, session: Session = Depends(get_session)):
+def get_run_dedup(
+    run_id: str,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
     r = session.get(Run, run_id)
     if not r:
         raise HTTPException(404, "Run not found")
+    check_owner(r.owner_id, user)
 
     same_wf_runs = list(session.exec(select(Run).where(Run.workflow_id == r.workflow_id)).all())
+    if user is not None:
+        same_wf_runs = [item for item in same_wf_runs if item.owner_id in (None, user.id)]
     same_wf_runs.sort(key=lambda item: item.started_at or item.finished_at or item.id)
 
     prior_findings: list[dict] = []
@@ -113,10 +136,15 @@ def get_run_dedup(run_id: str, session: Session = Depends(get_session)):
 
 
 @router.get("/{run_id}/report.json")
-def get_report_json(run_id: str, session: Session = Depends(get_session)):
+def get_report_json(
+    run_id: str,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
     r = session.get(Run, run_id)
     if not r:
         raise HTTPException(404, "Run not found")
+    check_owner(r.owner_id, user)
     summary = r.summary_json or {}
     paths = (summary.get("report") or {}).get("paths") or {}
     json_path = paths.get("json_path")
@@ -134,10 +162,15 @@ def get_report_json(run_id: str, session: Session = Depends(get_session)):
 
 
 @router.get("/{run_id}/report.md")
-def get_report_md(run_id: str, session: Session = Depends(get_session)):
+def get_report_md(
+    run_id: str,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
     r = session.get(Run, run_id)
     if not r:
         raise HTTPException(404, "Run not found")
+    check_owner(r.owner_id, user)
     summary = r.summary_json or {}
     paths = (summary.get("report") or {}).get("paths") or {}
     md_path = paths.get("md_path")
@@ -151,10 +184,15 @@ def get_report_md(run_id: str, session: Session = Depends(get_session)):
 
 
 @router.get("/{run_id}/report.pdf")
-def get_report_pdf(run_id: str, session: Session = Depends(get_session)):
+def get_report_pdf(
+    run_id: str,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
     r = session.get(Run, run_id)
     if not r:
         raise HTTPException(404, "Run not found")
+    check_owner(r.owner_id, user)
     findings = load_run_findings(r)
     pdf_bytes = render_report_pdf(
         run_id=r.id,

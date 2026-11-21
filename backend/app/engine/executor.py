@@ -68,6 +68,7 @@ class Executor:
         graph: dict[str, Any],
         trigger: str = "manual",
         wait: bool = False,
+        owner_id: str | None = None,
     ) -> str:
         settings = get_settings()
         try:
@@ -77,7 +78,7 @@ class Executor:
 
         run_id = None
         with self.session_factory() as session:
-            run = Run(workflow_id=workflow_id, status="pending", trigger=trigger)
+            run = Run(workflow_id=workflow_id, owner_id=owner_id, status="pending", trigger=trigger)
             session.add(run)
             session.commit()
             session.refresh(run)
@@ -103,7 +104,7 @@ class Executor:
                     session.add(run)
                     session.commit()
             try:
-                await self._execute_graph(run_id, graph, workspace)
+                await self._execute_graph(run_id, graph, workspace, owner_id=owner_id)
             except Exception as e:
                 logger.exception("Run %s failed: %s", run_id, e)
                 with self.session_factory() as session:
@@ -139,7 +140,13 @@ class Executor:
 
         return run_id
 
-    async def _execute_graph(self, run_id: str, graph: dict[str, Any], workspace_root: Path) -> None:
+    async def _execute_graph(
+        self,
+        run_id: str,
+        graph: dict[str, Any],
+        workspace_root: Path,
+        owner_id: str | None = None,
+    ) -> None:
         settings = get_settings()
         order = topological_order(graph)
         nodes = {n["id"]: n for n in graph.get("nodes", [])}
@@ -230,6 +237,7 @@ class Executor:
                     node_id=node_id,
                     workspace=workspace_root,
                     settings=settings,
+                    owner_id=owner_id,
                 )
 
                 timeout = settings.node_timeout_sec

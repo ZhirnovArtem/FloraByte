@@ -139,6 +139,7 @@ class Workflow(SQLModel, table=True):
     graph_json: dict = SQLField(default_factory=dict, sa_column=Column(JSON))
     is_template: bool = False
     description: str = ""
+    owner_id: str | None = SQLField(default=None, index=True)
     created_at: datetime = SQLField(default_factory=_utcnow)
     updated_at: datetime = SQLField(default_factory=_utcnow)
 
@@ -148,6 +149,7 @@ class Run(SQLModel, table=True):
 
     id: str = SQLField(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     workflow_id: str = SQLField(index=True)
+    owner_id: str | None = SQLField(default=None, index=True)
     status: str = "pending"  # pending | running | success | failed | partial
     trigger: str = "manual"
     started_at: datetime | None = None
@@ -176,15 +178,49 @@ class Credential(SQLModel, table=True):
     name: str
     kind: str  # telegram | llm | webhook | smtp | generic
     encrypted_value: str  # Fernet ciphertext
+    owner_id: str | None = SQLField(default=None, index=True)
     created_at: datetime = SQLField(default_factory=_utcnow)
 
 
 class IntegrationSetting(SQLModel, table=True):
     __tablename__ = "integration_settings"
 
-    kind: str = SQLField(primary_key=True)  # "ai" | "telegram"
+    kind: str = SQLField(primary_key=True)  # "ai" | "telegram" or "{user_id}:ai" | "{user_id}:telegram"
     enabled: bool = True
     auto_send: bool = True  # for telegram: auto send after scan vs on-demand
     config_json: dict = SQLField(default_factory=dict, sa_column=Column(JSON))
     encrypted_secret: str = ""  # Fernet-encrypted API key / bot token
     updated_at: datetime = SQLField(default_factory=_utcnow)
+
+
+class User(SQLModel, table=True):
+    __tablename__ = "users"
+
+    id: str = SQLField(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    email: str = SQLField(index=True, unique=True)
+    password_hash: str
+    is_active: bool = True
+    created_at: datetime = SQLField(default_factory=_utcnow)
+
+
+class UserSession(SQLModel, table=True):
+    __tablename__ = "user_sessions"
+
+    id: str = SQLField(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    user_id: str = SQLField(index=True)
+    token_hash: str = SQLField(index=True, unique=True)
+    csrf_token: str
+    expires_at: datetime
+    revoked: bool = False
+    created_at: datetime = SQLField(default_factory=_utcnow)
+
+
+class PasswordResetToken(SQLModel, table=True):
+    __tablename__ = "password_reset_tokens"
+
+    id: str = SQLField(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    user_id: str = SQLField(index=True)
+    token_hash: str = SQLField(index=True)
+    expires_at: datetime
+    used: bool = False
+    created_at: datetime = SQLField(default_factory=_utcnow)

@@ -19,10 +19,12 @@ import NodeSidebar from './NodeSidebar';
 import NodeSettings from './NodeSettings';
 import ReportPanel from './ReportPanel';
 import IntegrationsModal from './IntegrationsModal';
+import SettingsModal from './SettingsModal';
 import { fallbackNodeCatalog } from '../config/nodeCatalog';
 import * as api from '../api/client';
 import { connectionError, safeGraphForLocalStorage } from '../utils/graphValidation';
 import type {
+  AuthUserDto,
   BackendGraph,
   CredentialDto,
   FindingDto,
@@ -197,7 +199,12 @@ function buildStarterNodes(catalog: NodeTypeSpec[]): { nodes: SecurityNodeType[]
   return buildSmartPipelineNodes(catalog, '', DEFAULT_INTEGRATIONS);
 }
 
-function WorkflowEditorContent() {
+type WorkflowEditorProps = {
+  user: AuthUserDto;
+  onLogout: () => void;
+};
+
+function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
   const [catalog, setCatalog] = useState<NodeTypeSpec[]>(fallbackNodeCatalog);
   const [catalogSource, setCatalogSource] = useState<'api' | 'fallback'>('fallback');
   const [templates, setTemplates] = useState<TemplateDto[]>([]);
@@ -205,6 +212,7 @@ function WorkflowEditorContent() {
   const [credentials, setCredentials] = useState<CredentialDto[]>([]);
   const [integrations, setIntegrations] = useState<IntegrationsDto>(DEFAULT_INTEGRATIONS);
   const [integrationsOpen, setIntegrationsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const [workflowId, setWorkflowId] = useState<string | null>(null);
   const [workflowName, setWorkflowName] = useState<string>('Security Workflow');
@@ -733,19 +741,35 @@ function WorkflowEditorContent() {
       {/* Верхняя панель управления */}
       <header
         style={{
-          height: 54,
-          padding: '0 14px',
+          minHeight: 54,
+          padding: '6px 14px',
           background: '#0f172a',
           color: '#f8fafc',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: 10,
+          flexWrap: 'wrap',
           flexShrink: 0,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <strong style={{ fontSize: 15 }}>FloraByte · AI Security Workflow</strong>
+          <strong style={{ fontSize: 15 }}>FloraByte</strong>
+          <span
+            title={`Вход выполнен как ${user.email}`}
+            style={{
+              padding: '3px 8px',
+              borderRadius: 999,
+              background: '#064e3b',
+              color: '#6ee7b7',
+              border: '1px solid #047857',
+              fontSize: 11,
+              fontWeight: 700,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            ● Авторизован
+          </span>
           <input
             value={workflowName}
             onChange={(e) => setWorkflowName(e.target.value)}
@@ -757,7 +781,7 @@ function WorkflowEditorContent() {
               background: '#1e293b',
               color: '#fff',
               fontSize: 13,
-              width: 190,
+              width: 175,
             }}
           />
           <select
@@ -770,7 +794,7 @@ function WorkflowEditorContent() {
               background: '#1e293b',
               color: '#fff',
               fontSize: 12,
-              maxWidth: 190,
+              maxWidth: 175,
             }}
           >
             <option value="">localStorage (запасной)</option>
@@ -782,7 +806,7 @@ function WorkflowEditorContent() {
           </select>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <label
             style={{
               padding: '7px 12px',
@@ -809,6 +833,24 @@ function WorkflowEditorContent() {
 
           <button
             type="button"
+            onClick={() => setSettingsOpen(true)}
+            style={{
+              padding: '7px 11px',
+              background: '#334155',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 7,
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+            title={`Настройки аккаунта (${user.email})`}
+          >
+            Настройки
+          </button>
+
+          <button
+            type="button"
             onClick={() => setIntegrationsOpen(true)}
             style={{
               padding: '7px 11px',
@@ -823,21 +865,6 @@ function WorkflowEditorContent() {
             title="Настроить AI и Telegram один раз для всех сценариев"
           >
             Интеграции ({integrations.ai.configured ? 'AI ✓' : 'AI –'} · {integrations.telegram.configured ? 'TG ✓' : 'TG –'})
-          </button>
-
-          <button
-            onClick={() => {
-              const token = window.prompt('Ключ доступа к API (оставьте пустым для удаления):');
-              if (token === null) return;
-              api.setApiAccessToken(token.trim());
-              setStatusMsg(token.trim() ? 'Ключ доступа сохранён в sessionStorage до закрытия вкладки.' : 'Ключ доступа очищен.');
-              void api.fetchNodeTypes().then((items) => {
-                setCatalog(items); setCatalogSource('api');
-              }).catch((error: Error) => setStatusMsg(`Ошибка доступа API: ${error.message}`));
-            }}
-            style={{ padding: '7px 10px', background: '#334155', color: 'white', border: 0, borderRadius: 7, cursor: 'pointer' }}
-          >
-            Ключ API
           </button>
 
           <button
@@ -903,6 +930,24 @@ function WorkflowEditorContent() {
             }}
           >
             Удалить
+          </button>
+
+          <button
+            type="button"
+            onClick={onLogout}
+            style={{
+              padding: '7px 11px',
+              background: '#1e293b',
+              color: '#fca5a5',
+              border: '1px solid #475569',
+              borderRadius: 7,
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+            title={`Выйти (${user.email})`}
+          >
+            Выйти из аккаунта
           </button>
         </div>
       </header>
@@ -1025,6 +1070,16 @@ function WorkflowEditorContent() {
         }}
       />
 
+      {settingsOpen && (
+        <SettingsModal
+          user={user}
+          integrations={integrations}
+          onClose={() => setSettingsOpen(false)}
+          onOpenIntegrations={() => setIntegrationsOpen(true)}
+          onLogout={onLogout}
+        />
+      )}
+
       {integrationsOpen && (
         <IntegrationsModal
           key={`${integrations.ai.configured}-${integrations.telegram.configured}-${integrations.telegram.chat_id}`}
@@ -1044,10 +1099,10 @@ function WorkflowEditorContent() {
   );
 }
 
-export default function WorkflowEditor() {
+export default function WorkflowEditor({ user, onLogout }: WorkflowEditorProps) {
   return (
     <ReactFlowProvider>
-      <WorkflowEditorContent />
+      <WorkflowEditorContent user={user} onLogout={onLogout} />
     </ReactFlowProvider>
   );
 }

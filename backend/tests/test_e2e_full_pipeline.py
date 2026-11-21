@@ -14,6 +14,7 @@ from sqlmodel import SQLModel
 from app.config import get_settings
 from app.core.db import get_engine, init_db
 from app.main import app
+from tests.conftest import authenticate_client
 
 
 @pytest.fixture(scope="module")
@@ -34,6 +35,7 @@ def full_client(tmp_path_factory):
     SQLModel.metadata.drop_all(get_engine())
     init_db()
     with TestClient(app) as c:
+        authenticate_client(c)
         yield c
 
 

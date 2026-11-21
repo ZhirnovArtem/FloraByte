@@ -51,7 +51,7 @@ def _findings_as_dicts(inputs: dict[str, Any]) -> list[dict]:
     return out
 
 
-def _resolve_gemini_config(params: Params) -> tuple[str | None, str | None, str | None, str | None]:
+def _resolve_gemini_config(params: Params, owner_id: str | None = None) -> tuple[str | None, str | None, str | None, str | None]:
     """Return (api_key, model, base_url, provider_override)."""
     settings = get_settings()
     key = settings.llm_api_key or os.getenv("GEMINI_API_KEY", "").strip() or None
@@ -74,7 +74,11 @@ def _resolve_gemini_config(params: Params) -> tuple[str | None, str | None, str 
     else:
         try:
             with Session(get_engine()) as session:
-                integ = session.get(IntegrationSetting, "ai")
+                integ = None
+                if owner_id:
+                    integ = session.get(IntegrationSetting, f"{owner_id}:ai")
+                if integ is None:
+                    integ = session.get(IntegrationSetting, "ai")
                 if integ and integ.enabled:
                     cfg = integ.config_json or {}
                     if not key and integ.encrypted_secret:
@@ -277,7 +281,7 @@ class AiExplainNode(BaseNode):
                 }
             }
 
-        key, model, base_url, provider_override = _resolve_gemini_config(params)
+        key, model, base_url, provider_override = _resolve_gemini_config(params, owner_id=ctx.owner_id)
         settings = get_settings()
         provider = (provider_override or settings.llm_provider).strip().lower()
         effective_base = base_url or settings.llm_base_url

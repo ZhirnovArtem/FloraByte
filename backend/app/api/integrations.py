@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlsplit
 
 import httpx
@@ -13,10 +13,11 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from app.config import get_settings
+from app.core.auth import check_owner, get_current_user
 from app.core.crypto import decrypt, encrypt
 from app.core.db import get_session
 from app.core.masking import mask_secret, redact_text
-from app.core.models import IntegrationSetting, Run
+from app.core.models import IntegrationSetting, Run, User
 from app.core.run_analytics import load_run_findings
 from app.nodes.notify.telegram import (
     _format_message,
@@ -57,9 +58,21 @@ class TelegramIntegrationTest(BaseModel):
     chat_id: str = ""
 
 
-def _read_ai_status(session: Session) -> dict[str, Any]:
+def _integ_key(user: Optional[User], kind: str) -> str:
+    return f"{user.id}:{kind}" if user is not None else kind
+
+
+def _get_integ_row(session: Session, user: Optional[User], kind: str) -> IntegrationSetting | None:
+    if user is not None:
+        row = session.get(IntegrationSetting, f"{user.id}:{kind}")
+        if row is not None:
+            return row
+    return session.get(IntegrationSetting, kind)
+
+
+def _read_ai_status(session: Session, user: Optional[User] = None) -> dict[str, Any]:
     settings = get_settings()
-    row = session.get(IntegrationSetting, "ai")
+    row = _get_integ_row(session, user, "ai")
     env_key = (settings.llm_api_key or os.getenv("GEMINI_API_KEY", "")).strip()
     if row and row.enabled:
         cfg = row.config_json or {}
@@ -97,9 +110,9 @@ def _read_ai_status(session: Session) -> dict[str, Any]:
     }
 
 
-def _read_telegram_status(session: Session) -> dict[str, Any]:
+def _read_telegram_status(session: Session, user: Optional[User] = None) -> dict[str, Any]:
     settings = get_settings()
-    row = session.get(IntegrationSetting, "telegram")
+    row = _get_integ_row(session, user, "telegram")
     env_token = normalize_bot_token(settings.telegram_bot_token)
     env_chat = (settings.telegram_chat_id or "").strip()
 
@@ -137,26 +150,34 @@ def _read_telegram_status(session: Session) -> dict[str, Any]:
 
 
 @router.get("")
-def get_integrations(session: Session = Depends(get_session)):
+def get_integrations(
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
     return {
-        "ai": _read_ai_status(session),
-        "telegram": _read_telegram_status(session),
+        "ai": _read_ai_status(session, user),
+        "telegram": _read_telegram_status(session, user),
     }
 
 
 @router.put("/ai")
-def save_ai_integration(body: AiIntegrationUpdate, session: Session = Depends(get_session)):
+def save_ai_integration(
+    body: AiIntegrationUpdate,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
     provider = body.provider.strip().lower() or "gemini"
     if provider not in ("gemini", "openai_compatible"):
         raise HTTPException(400, "provider must be 'gemini' or 'openai_compatible'")
 
-    row = session.get(IntegrationSetting, "ai")
+    key = _integ_key(user, "ai")
+    row = session.get(IntegrationSetting, key)
     secret = row.encrypted_secret if row else ""
     if body.api_key.strip():
         secret = encrypt(body.api_key.strip())
 
     if not row:
-        row = IntegrationSetting(kind="ai")
+        row = IntegrationSetting(kind=key)
     row.enabled = body.enabled
     row.encrypted_secret = secret
     row.config_json = {
@@ -167,13 +188,17 @@ def save_ai_integration(body: AiIntegrationUpdate, session: Session = Depends(ge
     row.updated_at = datetime.now(timezone.utc)
     session.add(row)
     session.commit()
-    return _read_ai_status(session)
+    return _read_ai_status(session, user)
 
 
 @router.post("/ai/test")
-async def test_ai_integration(body: AiIntegrationTest, session: Session = Depends(get_session)):
-    status = _read_ai_status(session)
-    row = session.get(IntegrationSetting, "ai")
+async def test_ai_integration(
+    body: AiIntegrationTest,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
+    status = _read_ai_status(session, user)
+    row = _get_integ_row(session, user, "ai")
     settings = get_settings()
 
     provider = (body.provider or status["provider"] or "gemini").strip().lower()
@@ -230,8 +255,11 @@ async def test_ai_integration(body: AiIntegrationTest, session: Session = Depend
 
 
 @router.delete("/ai")
-def delete_ai_integration(session: Session = Depends(get_session)):
-    row = session.get(IntegrationSetting, "ai")
+def delete_ai_integration(
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
+    row = session.get(IntegrationSetting, _integ_key(user, "ai"))
     if row:
         session.delete(row)
         session.commit()
@@ -239,8 +267,12 @@ def delete_ai_integration(session: Session = Depends(get_session)):
 
 
 @router.post("/telegram/test")
-async def test_telegram_integration(body: TelegramIntegrationTest, session: Session = Depends(get_session)):
-    row = session.get(IntegrationSetting, "telegram")
+async def test_telegram_integration(
+    body: TelegramIntegrationTest,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
+    row = _get_integ_row(session, user, "telegram")
     settings = get_settings()
 
     token = normalize_bot_token(body.bot_token)
@@ -262,8 +294,13 @@ async def test_telegram_integration(body: TelegramIntegrationTest, session: Sess
 
 
 @router.put("/telegram")
-async def save_telegram_integration(body: TelegramIntegrationUpdate, session: Session = Depends(get_session)):
-    row = session.get(IntegrationSetting, "telegram")
+async def save_telegram_integration(
+    body: TelegramIntegrationUpdate,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
+    key = _integ_key(user, "telegram")
+    row = session.get(IntegrationSetting, key)
     token = normalize_bot_token(body.bot_token)
     if not token and row and row.encrypted_secret:
         try:
@@ -291,7 +328,7 @@ async def save_telegram_integration(body: TelegramIntegrationUpdate, session: Se
         verified = True
 
     if not row:
-        row = IntegrationSetting(kind="telegram")
+        row = IntegrationSetting(kind=key)
     row.enabled = body.enabled
     row.auto_send = body.auto_send
     row.encrypted_secret = encrypt(token)
@@ -303,12 +340,15 @@ async def save_telegram_integration(body: TelegramIntegrationUpdate, session: Se
     row.updated_at = datetime.now(timezone.utc)
     session.add(row)
     session.commit()
-    return _read_telegram_status(session)
+    return _read_telegram_status(session, user)
 
 
 @router.delete("/telegram")
-def delete_telegram_integration(session: Session = Depends(get_session)):
-    row = session.get(IntegrationSetting, "telegram")
+def delete_telegram_integration(
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
+    row = session.get(IntegrationSetting, _integ_key(user, "telegram"))
     if row:
         session.delete(row)
         session.commit()
@@ -316,13 +356,18 @@ def delete_telegram_integration(session: Session = Depends(get_session)):
 
 
 @router.post("/telegram/send-run/{run_id}")
-async def send_run_to_telegram(run_id: str, session: Session = Depends(get_session)):
+async def send_run_to_telegram(
+    run_id: str,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
     run = session.get(Run, run_id)
     if not run:
         raise HTTPException(404, "Run not found")
+    check_owner(run.owner_id, user)
 
-    tg = _read_telegram_status(session)
-    row = session.get(IntegrationSetting, "telegram")
+    tg = _read_telegram_status(session, user)
+    row = _get_integ_row(session, user, "telegram")
     settings = get_settings()
 
     token = ""
