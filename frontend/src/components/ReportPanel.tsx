@@ -12,6 +12,8 @@ type ReportPanelProps = {
   onToggle: () => void;
   onSelectRun?: (runId: string) => void;
   onRefreshHistory?: () => void;
+  telegramConfigured?: boolean;
+  onSendTelegram?: (runId: string) => Promise<void>;
 };
 
 const SEV_COLORS: Record<string, { bg: string; fg: string; bar: string }> = {
@@ -31,6 +33,8 @@ export default function ReportPanel({
   onToggle,
   onSelectRun,
   onRefreshHistory,
+  telegramConfigured,
+  onSendTelegram,
 }: ReportPanelProps) {
   const [tab, setTab] = useState<'findings' | 'dashboard' | 'ai' | 'markdown' | 'log' | 'history'>('findings');
   const [catFilter, setCatFilter] = useState<string>('ALL');
@@ -39,6 +43,7 @@ export default function ReportPanel({
   const [targetRunId, setTargetRunId] = useState<string>('');
   const [compareResult, setCompareResult] = useState<RunCompareDto | null>(null);
   const [compareErr, setCompareErr] = useState<string>('');
+  const [sendingTg, setSendingTg] = useState(false);
 
   const ai: AiReportDto | null = run?.ai_report ?? null;
   const filtered = catFilter === 'ALL' ? findings : findings.filter((f) => f.category === catFilter);
@@ -176,6 +181,29 @@ export default function ReportPanel({
                 >
                   ↓ report.pdf
                 </a>
+                {telegramConfigured && onSendTelegram && (
+                  <button
+                    type="button"
+                    disabled={sendingTg}
+                    onClick={() => {
+                      setSendingTg(true);
+                      void onSendTelegram(run.id).finally(() => setSendingTg(false));
+                    }}
+                    style={{
+                      marginLeft: 6,
+                      padding: '3px 9px',
+                      borderRadius: 6,
+                      border: '1px solid #0284c7',
+                      background: '#e0f2fe',
+                      color: '#0369a1',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      cursor: sendingTg ? 'wait' : 'pointer',
+                    }}
+                  >
+                    {sendingTg ? 'Отправка…' : 'Отправить в Telegram'}
+                  </button>
+                )}
               </>
             )}
           </div>
@@ -379,41 +407,39 @@ export default function ReportPanel({
             <div>
               {!ai ? (
                 <div style={{ color: '#64748b', fontSize: 13 }}>
-                  AI-отчёт отсутствует. Добавьте блок <code>ai.explain</code> в сценарий и запустите выполнение.
+                  AI-отчёт отсутствует. Настройте AI в разделе «Интеграции» или добавьте блок <code>ai.explain</code> в сценарий.
                 </div>
               ) : (
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
-                    <strong>Резюме:</strong> <span>{ai.summary}</span>
-                    {ai.validation && (
-                      <span
-                        style={{
-                          fontSize: 11,
-                          padding: '2px 8px',
-                          borderRadius: 999,
-                          background:
-                            ai.validation.mode === 'llm'
-                              ? '#dcfce7'
-                              : ai.validation.mode === 'empty'
-                              ? '#e0f2fe'
-                              : '#fef3c7',
-                          color:
-                            ai.validation.mode === 'llm'
-                              ? '#166534'
-                              : ai.validation.mode === 'empty'
-                              ? '#075985'
-                              : '#92400e',
-                          fontWeight: 700,
-                        }}
-                      >
-                        {ai.validation.mode === 'llm'
-                          ? 'Режим: LLM'
+                    <strong>Общее заключение:</strong> <span>{ai.summary}</span>
+                    {ai.validation && (() => {
+                      const aiStatus =
+                        ai.validation.ai_status ||
+                        (ai.validation.mode === 'llm'
+                          ? 'LLM'
                           : ai.validation.mode === 'empty'
-                          ? 'Режим: Нет находок'
-                          : 'Режим: Fallback (без LLM)'}{' '}
-                        · passed={String(ai.validation.passed)} · dropped_cve={ai.validation.dropped_cve ?? 0}
-                      </span>
-                    )}
+                          ? 'Нет находок'
+                          : 'Fallback');
+                      const isErr = aiStatus === 'Ошибка';
+                      const isLlm = aiStatus === 'LLM';
+                      const isEmpty = aiStatus === 'Нет находок';
+                      return (
+                        <span
+                          style={{
+                            fontSize: 11,
+                            padding: '2px 8px',
+                            borderRadius: 999,
+                            background: isLlm ? '#dcfce7' : isEmpty ? '#e0f2fe' : isErr ? '#fee2e2' : '#fef3c7',
+                            color: isLlm ? '#166534' : isEmpty ? '#075985' : isErr ? '#991b1b' : '#92400e',
+                            fontWeight: 700,
+                          }}
+                        >
+                          Статус AI: {aiStatus} · passed={String(ai.validation.passed)} · dropped_cve=
+                          {ai.validation.dropped_cve ?? 0}
+                        </span>
+                      );
+                    })()}
                   </div>
                   {ai.validation?.mode === 'fallback' && (
                     <div
@@ -421,43 +447,73 @@ export default function ReportPanel({
                         padding: '8px 10px',
                         marginBottom: 10,
                         borderRadius: 6,
-                        background: '#fffbeb',
-                        border: '1px solid #fcd34d',
-                        color: '#92400e',
+                        background: ai.validation.ai_status === 'Ошибка' ? '#fef2f2' : '#fffbeb',
+                        border: ai.validation.ai_status === 'Ошибка' ? '1px solid #fca5a5' : '1px solid #fcd34d',
+                        color: ai.validation.ai_status === 'Ошибка' ? '#991b1b' : '#92400e',
                         fontSize: 12,
                       }}
                     >
-                      <strong>Внимание (резервный отчёт):</strong>{' '}
+                      <strong>
+                        {ai.validation.ai_status === 'Ошибка' ? 'Ошибка AI-модели (использован Fallback):' : 'Резервный отчёт (Fallback):'}
+                      </strong>{' '}
                       {ai.validation.fallback_reason ||
                         ai.validation.errors?.join('; ') ||
-                        'LLM недоступна или не прошла валидацию — показан шаблонный fallback-отчёт.'}
+                        'LLM не настроена или не прошла валидацию — показан шаблонный отчёт.'}
                     </div>
                   )}
-                  {ai.items.map((item, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        padding: 10,
-                        border: '1px solid #e2e8f0',
-                        borderRadius: 8,
-                        marginBottom: 8,
-                        background: '#f8fafc',
-                        fontSize: 12,
-                      }}
-                    >
-                      <div style={{ fontWeight: 700 }}>
-                        Finding #{item.finding_ref} {item.risk ? `· Risk: ${item.risk}` : ''}
+                  {ai.items.map((item, i) => {
+                    const matched = findings[item.finding_ref];
+                    const sev = matched ? SEV_COLORS[matched.severity ?? ''] ?? { bg: '#f1f5f9', fg: '#334155', bar: '#64748b' } : null;
+                    return (
+                      <div
+                        key={i}
+                        style={{
+                          padding: 10,
+                          border: '1px solid #e2e8f0',
+                          borderRadius: 8,
+                          marginBottom: 8,
+                          background: '#f8fafc',
+                          fontSize: 12,
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontWeight: 700 }}>
+                          <span>Находка #{item.finding_ref + 1}</span>
+                          {matched && (
+                            <>
+                              {sev && (
+                                <span style={{ padding: '1px 6px', borderRadius: 5, background: sev.bg, color: sev.fg, fontSize: 11 }}>
+                                  {matched.severity ?? '—'}
+                                </span>
+                              )}
+                              <span>{matched.category}</span>
+                              <code style={{ fontWeight: 500 }}>
+                                {matched.path}
+                                {matched.line ? `:${matched.line}` : ''}
+                              </code>
+                            </>
+                          )}
+                        </div>
+                        <div style={{ marginTop: 6 }}>
+                          <strong>Объяснение проблемы:</strong> {item.explanation}
+                        </div>
+                        {item.risk && (
+                          <div style={{ marginTop: 4, color: '#9a3412' }}>
+                            <strong>Возможные последствия:</strong> {item.risk}
+                          </div>
+                        )}
+                        {item.fix_steps?.length > 0 && (
+                          <div style={{ marginTop: 4 }}>
+                            <strong>Пошаговые рекомендации по исправлению:</strong>
+                            <ul style={{ margin: '4px 0 0 18px', padding: 0 }}>
+                              {item.fix_steps.map((step, j) => (
+                                <li key={j}>{step}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
                       </div>
-                      <div style={{ marginTop: 4 }}>{item.explanation}</div>
-                      {item.fix_steps?.length > 0 && (
-                        <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
-                          {item.fix_steps.map((step, j) => (
-                            <li key={j}>{step}</li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

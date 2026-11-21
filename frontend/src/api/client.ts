@@ -1,11 +1,15 @@
 import type {
+  AiIntegrationDto,
   BackendGraph,
   CredentialDto,
   FindingDto,
   GeneratedWorkflowDto,
+  IntegrationsDto,
+  IntegrationTestResult,
   NodeTypeSpec,
   RunCompareDto,
   RunDto,
+  TelegramIntegrationDto,
   TemplateDto,
   UploadResponse,
   WorkflowDto,
@@ -202,4 +206,75 @@ export async function generateAiWorkflow(prompt: string): Promise<GeneratedWorkf
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt }),
   });
+}
+
+export async function getIntegrations(): Promise<IntegrationsDto> {
+  return requestJson<IntegrationsDto>('/api/integrations');
+}
+
+export async function saveAiIntegration(payload: {
+  provider: string;
+  model: string;
+  base_url: string;
+  api_key?: string;
+  enabled?: boolean;
+}): Promise<AiIntegrationDto> {
+  return requestJson<AiIntegrationDto>('/api/integrations/ai', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function testAiIntegration(payload: {
+  provider: string;
+  model: string;
+  base_url: string;
+  api_key?: string;
+}): Promise<IntegrationTestResult> {
+  return requestJson<IntegrationTestResult>('/api/integrations/ai/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteAiIntegration(): Promise<void> {
+  await requestJson<{ ok: boolean }>('/api/integrations/ai', { method: 'DELETE' });
+}
+
+export async function saveTelegramIntegration(payload: {
+  bot_token?: string;
+  chat_id: string;
+  auto_send: boolean;
+  enabled?: boolean;
+  verify?: boolean;
+}): Promise<TelegramIntegrationDto> {
+  return requestJson<TelegramIntegrationDto>('/api/integrations/telegram', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function testTelegramIntegration(payload: {
+  bot_token?: string;
+  chat_id: string;
+}): Promise<IntegrationTestResult> {
+  return requestJson<IntegrationTestResult>('/api/integrations/telegram/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteTelegramIntegration(): Promise<void> {
+  await requestJson<{ ok: boolean }>('/api/integrations/telegram', { method: 'DELETE' });
+}
+
+export async function sendRunToTelegram(runId: string): Promise<{ sent: boolean; chat_id: string }> {
+  return requestJson<{ sent: boolean; chat_id: string }>(
+    `/api/integrations/telegram/send-run/${encodeURIComponent(runId)}`,
+    { method: 'POST' },
+  );
 }

@@ -177,3 +177,14 @@ class Credential(SQLModel, table=True):
     kind: str  # telegram | llm | webhook | smtp | generic
     encrypted_value: str  # Fernet ciphertext
     created_at: datetime = SQLField(default_factory=_utcnow)
+
+
+class IntegrationSetting(SQLModel, table=True):
+    __tablename__ = "integration_settings"
+
+    kind: str = SQLField(primary_key=True)  # "ai" | "telegram"
+    enabled: bool = True
+    auto_send: bool = True  # for telegram: auto send after scan vs on-demand
+    config_json: dict = SQLField(default_factory=dict, sa_column=Column(JSON))
+    encrypted_secret: str = ""  # Fernet-encrypted API key / bot token
+    updated_at: datetime = SQLField(default_factory=_utcnow)

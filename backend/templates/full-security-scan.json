@@ -1,81 +1,55 @@
 {
   "name": "Full Security Scan",
-  "description": "Upload ZIP → Secrets + SCA + SAST → Merge → Export + AI Explain → If/Else → Telegram (both outcomes)",
+  "description": "Upload ZIP → Secrets + SCA + SAST → Merge → AI Explain → Export Report → If/Else → Telegram",
   "graph": {
     "nodes": [
       {
         "id": "t1",
         "type": "trigger.manual",
         "params": {},
-        "position": {
-          "x": 0,
-          "y": 200
-        }
+        "position": { "x": 0, "y": 200 }
       },
       {
         "id": "s1",
         "type": "source.upload_zip",
-        "params": {
-          "upload_id": ""
-        },
-        "position": {
-          "x": 180,
-          "y": 200
-        }
+        "params": { "upload_id": "" },
+        "position": { "x": 180, "y": 200 }
       },
       {
         "id": "sc1",
         "type": "scanner.secrets",
         "params": {},
-        "position": {
-          "x": 360,
-          "y": 80
-        }
+        "position": { "x": 360, "y": 80 }
       },
       {
         "id": "sc2",
         "type": "scanner.sca",
         "params": {},
-        "position": {
-          "x": 360,
-          "y": 200
-        }
+        "position": { "x": 360, "y": 200 }
       },
       {
         "id": "sc3",
         "type": "scanner.sast",
         "params": {},
-        "position": {
-          "x": 360,
-          "y": 320
-        }
+        "position": { "x": 360, "y": 320 }
       },
       {
         "id": "m1",
         "type": "findings.merge",
         "params": {},
-        "position": {
-          "x": 560,
-          "y": 200
-        }
-      },
-      {
-        "id": "e1",
-        "type": "findings.export",
-        "params": {},
-        "position": {
-          "x": 750,
-          "y": 65
-        }
+        "position": { "x": 560, "y": 200 }
       },
       {
         "id": "ai1",
         "type": "ai.explain",
         "params": {},
-        "position": {
-          "x": 750,
-          "y": 290
-        }
+        "position": { "x": 750, "y": 200 }
+      },
+      {
+        "id": "e1",
+        "type": "findings.export",
+        "params": {},
+        "position": { "x": 940, "y": 200 }
       },
       {
         "id": "if1",
@@ -85,102 +59,34 @@
           "op": ">",
           "right": "0"
         },
-        "position": {
-          "x": 990,
-          "y": 290
-        }
+        "position": { "x": 1130, "y": 200 }
       },
       {
         "id": "tg1",
         "type": "notify.telegram",
         "params": {},
-        "position": {
-          "x": 1230,
-          "y": 180
-        }
+        "position": { "x": 1350, "y": 110 }
       },
       {
         "id": "tg2",
         "type": "notify.telegram",
         "params": {},
-        "position": {
-          "x": 1230,
-          "y": 400
-        }
+        "position": { "x": 1350, "y": 290 }
       }
     ],
     "edges": [
-      {
-        "id": "e1",
-        "source": "t1",
-        "target": "s1"
-      },
-      {
-        "id": "e2",
-        "source": "s1",
-        "target": "sc1"
-      },
-      {
-        "id": "e3",
-        "source": "s1",
-        "target": "sc2"
-      },
-      {
-        "id": "e4",
-        "source": "s1",
-        "target": "sc3"
-      },
-      {
-        "id": "e5",
-        "source": "sc1",
-        "target": "m1",
-        "targetHandle": "a"
-      },
-      {
-        "id": "e6",
-        "source": "sc2",
-        "target": "m1",
-        "targetHandle": "b"
-      },
-      {
-        "id": "e7",
-        "source": "sc3",
-        "target": "m1",
-        "targetHandle": "c"
-      },
-      {
-        "id": "e8",
-        "source": "m1",
-        "target": "e1"
-      },
-      {
-        "id": "e9",
-        "source": "m1",
-        "sourceHandle": "findings",
-        "target": "ai1",
-        "targetHandle": "findings"
-      },
-      {
-        "id": "e10",
-        "source": "ai1",
-        "sourceHandle": "report",
-        "target": "if1",
-        "targetHandle": "in"
-      },
-      {
-        "id": "e11",
-        "source": "if1",
-        "sourceHandle": "true",
-        "target": "tg1",
-        "targetHandle": "report"
-      },
-      {
-        "id": "e12",
-        "source": "if1",
-        "sourceHandle": "false",
-        "target": "tg2",
-        "targetHandle": "report"
-      }
+      { "id": "e1", "source": "t1", "target": "s1" },
+      { "id": "e2", "source": "s1", "target": "sc1" },
+      { "id": "e3", "source": "s1", "target": "sc2" },
+      { "id": "e4", "source": "s1", "target": "sc3" },
+      { "id": "e5", "source": "sc1", "target": "m1", "targetHandle": "a" },
+      { "id": "e6", "source": "sc2", "target": "m1", "targetHandle": "b" },
+      { "id": "e7", "source": "sc3", "target": "m1", "targetHandle": "c" },
+      { "id": "e8", "source": "m1", "sourceHandle": "findings", "target": "ai1", "targetHandle": "findings" },
+      { "id": "e9", "source": "ai1", "sourceHandle": "report", "target": "e1", "targetHandle": "report" },
+      { "id": "e10", "source": "e1", "sourceHandle": "report", "target": "if1", "targetHandle": "in" },
+      { "id": "e11", "source": "if1", "sourceHandle": "true", "target": "tg1", "targetHandle": "report" },
+      { "id": "e12", "source": "if1", "sourceHandle": "false", "target": "tg2", "targetHandle": "report" }
     ]
   }
 }

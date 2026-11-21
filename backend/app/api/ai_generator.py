@@ -124,18 +124,24 @@ def _deterministic_workflow_from_prompt(prompt: str) -> dict[str, Any]:
     for idx, (sid, _) in enumerate(scanners):
         edges.append({"id": f"e-m-{sid}", "source": sid, "target": "m1", "targetHandle": handles[idx]})
 
-    nodes.append({"id": "e1", "type": "findings.export", "params": {}, "position": {"x": 860, "y": 90}})
-    edges.append({"id": "e-exp", "source": "m1", "target": "e1"})
-
+    next_x = 850
     last_report_node = "m1"
     last_handle = "findings"
     if want_ai:
-        nodes.append({"id": "ai1", "type": "ai.explain", "params": {}, "position": {"x": 860, "y": 280}})
+        nodes.append({"id": "ai1", "type": "ai.explain", "params": {}, "position": {"x": next_x, "y": 200}})
         edges.append({"id": "e-ai", "source": "m1", "sourceHandle": "findings", "target": "ai1", "targetHandle": "findings"})
         last_report_node = "ai1"
         last_handle = "report"
+        next_x += 200
 
-    next_x = 1070
+    nodes.append({"id": "e1", "type": "findings.export", "params": {}, "position": {"x": next_x, "y": 200}})
+    if want_ai:
+        edges.append({"id": "e-exp", "source": "ai1", "sourceHandle": "report", "target": "e1", "targetHandle": "report"})
+    else:
+        edges.append({"id": "e-exp", "source": "m1", "sourceHandle": "findings", "target": "e1", "targetHandle": "findings"})
+    last_report_node = "e1"
+    last_handle = "report"
+    next_x += 200
     if want_if and (want_tg or want_wh):
         nodes.append(
             {

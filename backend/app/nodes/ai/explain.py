@@ -17,7 +17,7 @@ from app.config import get_settings
 from app.core.crypto import decrypt
 from app.core.db import get_engine
 from app.core.masking import mask_evidence, redact_text
-from app.core.models import Credential, Finding
+from app.core.models import Credential, Finding, IntegrationSetting
 from app.nodes.ai.validator import fallback_report, load_known_advisories, validate_llm_response
 from app.nodes.base import BaseNode, NodeContext, Port
 from app.nodes.registry import register_node
@@ -51,11 +51,14 @@ def _findings_as_dicts(inputs: dict[str, Any]) -> list[dict]:
     return out
 
 
-def _resolve_gemini_config(params: Params) -> tuple[str | None, str | None, str | None]:
+def _resolve_gemini_config(params: Params) -> tuple[str | None, str | None, str | None, str | None]:
+    """Return (api_key, model, base_url, provider_override)."""
     settings = get_settings()
     key = settings.llm_api_key or os.getenv("GEMINI_API_KEY", "").strip() or None
     model = params.model or os.getenv("GEMINI_MODEL", "").strip() or None
     base_url = params.base_url.strip() or None
+    provider_override = params.provider.strip().lower() or None
+
     if params.credential_id:
         with Session(get_engine()) as session:
             cred = session.get(Credential, params.credential_id)
@@ -68,7 +71,28 @@ def _resolve_gemini_config(params: Params) -> tuple[str | None, str | None, str 
                     base_url = base_url or parts[1]
                 if len(parts) > 2 and parts[2]:
                     model = model or parts[2]
-    return key, model, base_url
+    else:
+        try:
+            with Session(get_engine()) as session:
+                integ = session.get(IntegrationSetting, "ai")
+                if integ and integ.enabled:
+                    cfg = integ.config_json or {}
+                    if not key and integ.encrypted_secret:
+                        try:
+                            saved_key = decrypt(integ.encrypted_secret).strip()
+                            if saved_key:
+                                key = saved_key
+                        except Exception:
+                            pass
+                    if not provider_override and cfg.get("provider"):
+                        provider_override = str(cfg["provider"]).strip().lower()
+                    if not model and cfg.get("model"):
+                        model = str(cfg["model"]).strip()
+                    if not base_url and cfg.get("base_url"):
+                        base_url = str(cfg["base_url"]).strip()
+        except Exception:
+            pass
+    return key, model, base_url, provider_override
 
 
 def _to_canonical_security_findings(findings: list[dict]) -> list[dict]:
@@ -242,30 +266,38 @@ class AiExplainNode(BaseNode):
                 "report": {
                     "summary": fb.summary,
                     "items": [],
-                    "validation": {**validation, "passed": True, "mode": "empty", "fallback_reason": None},
+                    "validation": {
+                        **validation,
+                        "passed": True,
+                        "mode": "empty",
+                        "ai_status": "Нет находок",
+                        "fallback_reason": None,
+                    },
                     "findings": [],
                 }
             }
 
-        key, model, base_url = _resolve_gemini_config(params)
+        key, model, base_url, provider_override = _resolve_gemini_config(params)
         settings = get_settings()
-        provider = (params.provider or settings.llm_provider).strip().lower()
+        provider = (provider_override or settings.llm_provider).strip().lower()
         effective_base = base_url or settings.llm_base_url
         if not model:
             model = settings.llm_model if provider == "openai_compatible" else None
         known_advisories = load_known_advisories(settings.vuln_db_path)
         parsed = None
         fallback_reason: str | None = None
+        had_key = bool(key)
         try:
             if provider not in ("gemini", "openai_compatible"):
                 raise ValueError("LLM_PROVIDER must be gemini or openai_compatible")
             if provider == "gemini" and not key:
-                raise RuntimeError("GEMINI_API_KEY / LLM_API_KEY is not configured")
+                raise RuntimeError("AI API-ключ не настроен")
             if provider == "openai_compatible" and not key:
                 from urllib.parse import urlsplit
                 host = (urlsplit(effective_base).hostname or "").lower()
                 if host not in ("localhost", "127.0.0.1", "::1"):
-                    raise RuntimeError("LLM_API_KEY required for a non-local model")
+                    raise RuntimeError("AI API-ключ обязателен для удалённой модели")
+                had_key = True
 
             async def _invoke() -> str:
                 if provider == "openai_compatible":
@@ -292,9 +324,11 @@ class AiExplainNode(BaseNode):
             parsed = fallback_report(findings)
             validation["passed"] = False
             validation["mode"] = "fallback"
+            validation["ai_status"] = "Ошибка" if had_key else "Fallback"
             validation["fallback_reason"] = fallback_reason or "LLM response failed validation or returned no items"
         else:
             validation["mode"] = "llm"
+            validation["ai_status"] = "LLM"
             validation["fallback_reason"] = None
 
         return {

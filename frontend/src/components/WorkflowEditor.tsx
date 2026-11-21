@@ -18,6 +18,7 @@ import SecurityNode, { type SecurityNodeType } from './SecurityNode';
 import NodeSidebar from './NodeSidebar';
 import NodeSettings from './NodeSettings';
 import ReportPanel from './ReportPanel';
+import IntegrationsModal from './IntegrationsModal';
 import { fallbackNodeCatalog } from '../config/nodeCatalog';
 import * as api from '../api/client';
 import { connectionError, safeGraphForLocalStorage } from '../utils/graphValidation';
@@ -25,6 +26,7 @@ import type {
   BackendGraph,
   CredentialDto,
   FindingDto,
+  IntegrationsDto,
   NodeRunStatus,
   NodeTypeSpec,
   RunDto,
@@ -32,6 +34,28 @@ import type {
   WorkflowDto,
   WsRunEvent,
 } from '../types/workflow';
+
+const DEFAULT_INTEGRATIONS: IntegrationsDto = {
+  ai: {
+    configured: false,
+    enabled: false,
+    source: 'none',
+    provider: 'gemini',
+    model: 'gemini-2.5-flash',
+    base_url: '',
+    api_key_preview: '',
+  },
+  telegram: {
+    configured: false,
+    enabled: false,
+    auto_send: true,
+    source: 'none',
+    chat_id: '',
+    bot_token_preview: '',
+    bot_username: '',
+    verified: false,
+  },
+};
 
 const STORAGE_KEY = 'florabyte-workflow';
 const ACTIVE_RUN_KEY = 'florabyte-active-run-id';
@@ -101,29 +125,76 @@ function fromBackendGraph(
   return { nodes, edges };
 }
 
+function buildSmartPipelineNodes(
+  catalog: NodeTypeSpec[],
+  uploadId = '',
+  integrations: IntegrationsDto = DEFAULT_INTEGRATIONS,
+): { nodes: SecurityNodeType[]; edges: Edge[] } {
+  const includeAi = integrations.ai.configured;
+  const includeTelegram = integrations.telegram.configured && integrations.telegram.auto_send;
+
+  const nodes: BackendGraph['nodes'] = [
+    { id: 't1', type: 'trigger.manual', params: {}, position: { x: 40, y: 180 } },
+    { id: 's1', type: 'source.upload_zip', params: { upload_id: uploadId }, position: { x: 220, y: 180 } },
+    { id: 'sc1', type: 'scanner.secrets', params: {}, position: { x: 420, y: 60 } },
+    { id: 'sc2', type: 'scanner.sca', params: {}, position: { x: 420, y: 180 } },
+    { id: 'sc3', type: 'scanner.sast', params: {}, position: { x: 420, y: 300 } },
+    { id: 'm1', type: 'findings.merge', params: {}, position: { x: 630, y: 180 } },
+  ];
+  const edges: BackendGraph['edges'] = [
+    { id: 'e1', source: 't1', target: 's1' },
+    { id: 'e2', source: 's1', target: 'sc1' },
+    { id: 'e3', source: 's1', target: 'sc2' },
+    { id: 'e4', source: 's1', target: 'sc3' },
+    { id: 'e5', source: 'sc1', target: 'm1', targetHandle: 'a' },
+    { id: 'e6', source: 'sc2', target: 'm1', targetHandle: 'b' },
+    { id: 'e7', source: 'sc3', target: 'm1', targetHandle: 'c' },
+  ];
+
+  let nextX = 830;
+  let prevId = 'm1';
+  let prevHandle: string | null = 'findings';
+
+  if (includeAi) {
+    nodes.push({ id: 'ai1', type: 'ai.explain', params: {}, position: { x: nextX, y: 180 } });
+    edges.push({
+      id: 'e-ai',
+      source: prevId,
+      sourceHandle: prevHandle,
+      target: 'ai1',
+      targetHandle: 'findings',
+    });
+    prevId = 'ai1';
+    prevHandle = 'report';
+    nextX += 200;
+  }
+
+  nodes.push({ id: 'e1', type: 'findings.export', params: {}, position: { x: nextX, y: 180 } });
+  edges.push({
+    id: 'e-export',
+    source: prevId,
+    sourceHandle: prevHandle,
+    target: 'e1',
+    targetHandle: includeAi ? 'report' : 'findings',
+  });
+  nextX += 200;
+
+  if (includeTelegram) {
+    nodes.push({ id: 'tg1', type: 'notify.telegram', params: {}, position: { x: nextX, y: 180 } });
+    edges.push({
+      id: 'e-tg',
+      source: 'e1',
+      sourceHandle: 'report',
+      target: 'tg1',
+      targetHandle: 'report',
+    });
+  }
+
+  return fromBackendGraph({ nodes, edges }, catalog);
+}
+
 function buildStarterNodes(catalog: NodeTypeSpec[]): { nodes: SecurityNodeType[]; edges: Edge[] } {
-  const starterGraph: BackendGraph = {
-    nodes: [
-      { id: 't1', type: 'trigger.manual', params: {}, position: { x: 80, y: 80 } },
-      { id: 's1', type: 'source.upload_zip', params: { upload_id: '' }, position: { x: 320, y: 80 } },
-      { id: 'sc1', type: 'scanner.secrets', params: {}, position: { x: 180, y: 240 } },
-      { id: 'sc2', type: 'scanner.sca', params: {}, position: { x: 420, y: 240 } },
-      { id: 'sc3', type: 'scanner.sast', params: {}, position: { x: 660, y: 240 } },
-      { id: 'm1', type: 'findings.merge', params: {}, position: { x: 420, y: 400 } },
-      { id: 'e1', type: 'findings.export', params: {}, position: { x: 420, y: 550 } },
-    ],
-    edges: [
-      { id: 'e1', source: 't1', target: 's1' },
-      { id: 'e2', source: 's1', target: 'sc1' },
-      { id: 'e3', source: 's1', target: 'sc2' },
-      { id: 'e4', source: 's1', target: 'sc3' },
-      { id: 'e5', source: 'sc1', target: 'm1', targetHandle: 'a' },
-      { id: 'e6', source: 'sc2', target: 'm1', targetHandle: 'b' },
-      { id: 'e7', source: 'sc3', target: 'm1', targetHandle: 'c' },
-      { id: 'e8', source: 'm1', target: 'e1' },
-    ],
-  };
-  return fromBackendGraph(starterGraph, catalog);
+  return buildSmartPipelineNodes(catalog, '', DEFAULT_INTEGRATIONS);
 }
 
 function WorkflowEditorContent() {
@@ -132,6 +203,8 @@ function WorkflowEditorContent() {
   const [templates, setTemplates] = useState<TemplateDto[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowDto[]>([]);
   const [credentials, setCredentials] = useState<CredentialDto[]>([]);
+  const [integrations, setIntegrations] = useState<IntegrationsDto>(DEFAULT_INTEGRATIONS);
+  const [integrationsOpen, setIntegrationsOpen] = useState(false);
 
   const [workflowId, setWorkflowId] = useState<string | null>(null);
   const [workflowName, setWorkflowName] = useState<string>('Security Workflow');
@@ -279,22 +352,22 @@ function WorkflowEditorContent() {
     let cancelled = false;
     (async () => {
       try {
-        const [nodeTypesRes, tpls, wfs, creds, hist] = await Promise.all([
+        const [nodeTypesRes, tpls, wfs, creds, hist, integ] = await Promise.all([
           api.fetchNodeTypes(),
           api.listTemplates().catch(() => []),
           api.listWorkflows().catch(() => []),
           api.listCredentials().catch(() => []),
           api.listRuns(20).catch(() => []),
+          api.getIntegrations().catch(() => DEFAULT_INTEGRATIONS),
         ]);
         if (cancelled) return;
+        setIntegrations(integ);
         if (nodeTypesRes.length > 0) {
           setCatalog(nodeTypesRes);
           setCatalogSource('api');
-          // Enrich starter nodes with real ports/labels from backend
-          const freshStarter = buildStarterNodes(nodeTypesRes);
-          setNodes((curr) =>
-            curr.length === starterCount ? freshStarter.nodes : curr,
-          );
+          const freshStarter = buildSmartPipelineNodes(nodeTypesRes, '', integ);
+          setNodes((curr) => (curr.length === starterCount ? freshStarter.nodes : curr));
+          setEdges((curr) => (curr.length === starter.edges.length ? freshStarter.edges : curr));
         }
         setTemplates(tpls);
         setWorkflows(wfs);
@@ -323,7 +396,7 @@ function WorkflowEditorContent() {
       wsRef.current?.close();
       stopPolling();
     };
-  }, [attachToRun, setNodes, starterCount, stopPolling, syncRunState]);
+  }, [attachToRun, setEdges, setNodes, starter.edges.length, starterCount, stopPolling, syncRunState]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -412,21 +485,21 @@ function WorkflowEditorContent() {
       setStatusMsg(`Загрузка ${file.name}…`);
       const res = await api.uploadZip(file);
       setLastUpload({ id: res.upload_id, filename: res.filename });
-      // Auto-populate source.upload_zip nodes
-      setNodes((curr) =>
-        curr.map((n) =>
-          n.data.kind === 'source.upload_zip'
-            ? {
-                ...n,
-                data: {
-                  ...n.data,
-                  params: { ...(n.data.params ?? {}), upload_id: res.upload_id },
-                },
-              }
-            : n,
-        ),
-      );
-      setStatusMsg(`ZIP загружен: ${res.filename} (upload_id=${res.upload_id.slice(0, 8)}…)`);
+      const freshInteg = await api.getIntegrations().catch(() => integrations);
+      setIntegrations(freshInteg);
+      const built = buildSmartPipelineNodes(catalog, res.upload_id, freshInteg);
+      setNodes(built.nodes);
+      setEdges(built.edges);
+      setWorkflowId(null);
+
+      const missing: string[] = [];
+      if (!freshInteg.ai.configured) missing.push('AI');
+      if (!freshInteg.telegram.configured) missing.push('Telegram');
+      const missingNote =
+        missing.length > 0
+          ? ` Для автоматического подключения ${missing.join(' и ')} настройте их один раз в «Интеграции».`
+          : ' AI и Telegram подключены автоматически!';
+      setStatusMsg(`ZIP загружен (${res.filename}), готов сценарий проверки.${missingNote}`);
       return res.upload_id;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -592,6 +665,16 @@ function WorkflowEditorContent() {
     if (missingZip) {
       return `У блока "${missingZip.data.label}" не указан upload_id — загрузите .zip архив перед запуском.`;
     }
+    const unconfiguredTg = nodes.find(
+      (n) =>
+        n.data.kind === 'notify.telegram' &&
+        !n.data.params?.dry_run &&
+        !String(n.data.params?.credential_id ?? '').trim() &&
+        !integrations.telegram.configured,
+    );
+    if (unconfiguredTg) {
+      return 'Блок Telegram на схеме не настроен: задайте Bot Token и chat_id один раз в разделе «Интеграции» (или удалите блок).';
+    }
     // Mirror the backend validation so invalid graphs are rejected before saving.
     for (const edge of edges) {
       const withoutEdge = edges.filter((e) => e.id !== edge.id);
@@ -725,6 +808,24 @@ function WorkflowEditorContent() {
           </label>
 
           <button
+            type="button"
+            onClick={() => setIntegrationsOpen(true)}
+            style={{
+              padding: '7px 11px',
+              background: '#4f46e5',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 7,
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+            title="Настроить AI и Telegram один раз для всех сценариев"
+          >
+            Интеграции ({integrations.ai.configured ? 'AI ✓' : 'AI –'} · {integrations.telegram.configured ? 'TG ✓' : 'TG –'})
+          </button>
+
+          <button
             onClick={() => {
               const token = window.prompt('Ключ доступа к API (оставьте пустым для удаления):');
               if (token === null) return;
@@ -816,9 +917,32 @@ function WorkflowEditorContent() {
             color: '#1e3a8a',
             display: 'flex',
             justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 10,
           }}
         >
-          <span>{statusMsg}</span>
+          <span>
+            {statusMsg}{' '}
+            {(!integrations.ai.configured || !integrations.telegram.configured) && (
+              <button
+                type="button"
+                onClick={() => setIntegrationsOpen(true)}
+                style={{
+                  marginLeft: 6,
+                  padding: '2px 8px',
+                  borderRadius: 5,
+                  border: '1px solid #818cf8',
+                  background: '#eef2ff',
+                  color: '#3730a3',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Настроить интеграции
+              </button>
+            )}
+          </span>
           <button
             onClick={() => setStatusMsg('')}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#1e3a8a' }}
@@ -890,7 +1014,32 @@ function WorkflowEditorContent() {
           void syncRunState(runId);
         }}
         onRefreshHistory={() => void refreshRunsHistory()}
+        telegramConfigured={integrations.telegram.configured}
+        onSendTelegram={async (runId) => {
+          try {
+            const res = await api.sendRunToTelegram(runId);
+            setStatusMsg(`Отчёт отправлен в Telegram (chat_id=${res.chat_id}).`);
+          } catch (err) {
+            setStatusMsg(`Ошибка отправки в Telegram: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }}
       />
+
+      {integrationsOpen && (
+        <IntegrationsModal
+          key={`${integrations.ai.configured}-${integrations.telegram.configured}-${integrations.telegram.chat_id}`}
+          integrations={integrations}
+          onClose={() => setIntegrationsOpen(false)}
+          onUpdated={(next) => {
+            setIntegrations(next);
+            if (lastUpload) {
+              const rebuilt = buildSmartPipelineNodes(catalog, lastUpload.id, next);
+              setNodes(rebuilt.nodes);
+              setEdges(rebuilt.edges);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

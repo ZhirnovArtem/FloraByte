@@ -1,0 +1,354 @@
+"""Integrations API — one-time encrypted setup for AI and Telegram, plus connection checks and on-demand send."""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime, timezone
+from typing import Any
+from urllib.parse import urlsplit
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from sqlmodel import Session
+
+from app.config import get_settings
+from app.core.crypto import decrypt, encrypt
+from app.core.db import get_session
+from app.core.masking import mask_secret, redact_text
+from app.core.models import IntegrationSetting, Run
+from app.core.run_analytics import load_run_findings
+from app.nodes.notify.telegram import (
+    _format_message,
+    normalize_bot_token,
+    send_telegram_message,
+    validate_token_format,
+    verify_telegram_connection,
+)
+
+router = APIRouter(prefix="/api/integrations", tags=["integrations"])
+
+
+class AiIntegrationUpdate(BaseModel):
+    provider: str = Field("gemini", description="gemini | openai_compatible")
+    model: str = Field("gemini-2.5-flash", description="Model identifier")
+    base_url: str = Field("", description="Optional OpenAI-compatible base URL")
+    api_key: str = Field("", description="Optional new API key (keeps existing if blank)")
+    enabled: bool = True
+
+
+class AiIntegrationTest(BaseModel):
+    provider: str = ""
+    model: str = ""
+    base_url: str = ""
+    api_key: str = ""
+
+
+class TelegramIntegrationUpdate(BaseModel):
+    bot_token: str = Field("", description="Optional new Bot Token (keeps existing if blank)")
+    chat_id: str = Field(..., description="Target Telegram chat ID")
+    auto_send: bool = Field(True, description="Auto-add Telegram and send report after scan")
+    enabled: bool = True
+    verify: bool = Field(True, description="Verify token & chat_id via Telegram API before saving")
+
+
+class TelegramIntegrationTest(BaseModel):
+    bot_token: str = ""
+    chat_id: str = ""
+
+
+def _read_ai_status(session: Session) -> dict[str, Any]:
+    settings = get_settings()
+    row = session.get(IntegrationSetting, "ai")
+    env_key = (settings.llm_api_key or os.getenv("GEMINI_API_KEY", "")).strip()
+    if row and row.enabled:
+        cfg = row.config_json or {}
+        saved_key = ""
+        if row.encrypted_secret:
+            try:
+                saved_key = decrypt(row.encrypted_secret).strip()
+            except Exception:
+                saved_key = ""
+        effective_key = saved_key or env_key
+        provider = str(cfg.get("provider") or settings.llm_provider or "gemini")
+        base_url = str(cfg.get("base_url") or settings.llm_base_url or "")
+        is_local = (
+            provider == "openai_compatible"
+            and (urlsplit(base_url).hostname or "").lower() in ("localhost", "127.0.0.1", "::1")
+        )
+        return {
+            "configured": bool(effective_key or is_local),
+            "enabled": row.enabled,
+            "source": "settings" if saved_key else ("env" if env_key else ("local" if is_local else "none")),
+            "provider": provider,
+            "model": str(cfg.get("model") or os.getenv("GEMINI_MODEL", "") or "gemini-2.5-flash"),
+            "base_url": base_url,
+            "api_key_preview": mask_secret(effective_key, keep_last=4) if effective_key else "",
+        }
+
+    return {
+        "configured": bool(env_key),
+        "enabled": bool(env_key),
+        "source": "env" if env_key else "none",
+        "provider": settings.llm_provider or "gemini",
+        "model": os.getenv("GEMINI_MODEL", "").strip() or settings.llm_model or "gemini-2.5-flash",
+        "base_url": settings.llm_base_url or "",
+        "api_key_preview": mask_secret(env_key, keep_last=4) if env_key else "",
+    }
+
+
+def _read_telegram_status(session: Session) -> dict[str, Any]:
+    settings = get_settings()
+    row = session.get(IntegrationSetting, "telegram")
+    env_token = normalize_bot_token(settings.telegram_bot_token)
+    env_chat = (settings.telegram_chat_id or "").strip()
+
+    if row and row.enabled:
+        cfg = row.config_json or {}
+        saved_token = ""
+        if row.encrypted_secret:
+            try:
+                saved_token = normalize_bot_token(decrypt(row.encrypted_secret))
+            except Exception:
+                saved_token = ""
+        effective_token = saved_token or env_token
+        effective_chat = str(cfg.get("chat_id") or env_chat or "").strip()
+        return {
+            "configured": bool(effective_token and effective_chat),
+            "enabled": row.enabled,
+            "auto_send": row.auto_send,
+            "source": "settings" if saved_token else ("env" if env_token else "none"),
+            "chat_id": effective_chat,
+            "bot_token_preview": mask_secret(effective_token, keep_last=4) if effective_token else "",
+            "bot_username": str(cfg.get("bot_username") or ""),
+            "verified": bool(cfg.get("verified")),
+        }
+
+    return {
+        "configured": bool(env_token and env_chat),
+        "enabled": bool(env_token and env_chat),
+        "auto_send": bool(env_token and env_chat),
+        "source": "env" if (env_token and env_chat) else "none",
+        "chat_id": env_chat,
+        "bot_token_preview": mask_secret(env_token, keep_last=4) if env_token else "",
+        "bot_username": "",
+        "verified": False,
+    }
+
+
+@router.get("")
+def get_integrations(session: Session = Depends(get_session)):
+    return {
+        "ai": _read_ai_status(session),
+        "telegram": _read_telegram_status(session),
+    }
+
+
+@router.put("/ai")
+def save_ai_integration(body: AiIntegrationUpdate, session: Session = Depends(get_session)):
+    provider = body.provider.strip().lower() or "gemini"
+    if provider not in ("gemini", "openai_compatible"):
+        raise HTTPException(400, "provider must be 'gemini' or 'openai_compatible'")
+
+    row = session.get(IntegrationSetting, "ai")
+    secret = row.encrypted_secret if row else ""
+    if body.api_key.strip():
+        secret = encrypt(body.api_key.strip())
+
+    if not row:
+        row = IntegrationSetting(kind="ai")
+    row.enabled = body.enabled
+    row.encrypted_secret = secret
+    row.config_json = {
+        "provider": provider,
+        "model": body.model.strip() or "gemini-2.5-flash",
+        "base_url": body.base_url.strip(),
+    }
+    row.updated_at = datetime.now(timezone.utc)
+    session.add(row)
+    session.commit()
+    return _read_ai_status(session)
+
+
+@router.post("/ai/test")
+async def test_ai_integration(body: AiIntegrationTest, session: Session = Depends(get_session)):
+    status = _read_ai_status(session)
+    row = session.get(IntegrationSetting, "ai")
+    settings = get_settings()
+
+    provider = (body.provider or status["provider"] or "gemini").strip().lower()
+    model = (body.model or status["model"] or "gemini-2.5-flash").strip()
+    base_url = (body.base_url or status["base_url"] or settings.llm_base_url).strip()
+
+    key = body.api_key.strip()
+    if not key and row and row.encrypted_secret:
+        try:
+            key = decrypt(row.encrypted_secret).strip()
+        except Exception:
+            key = ""
+    if not key:
+        key = (settings.llm_api_key or os.getenv("GEMINI_API_KEY", "")).strip()
+
+    if provider == "gemini":
+        if not key:
+            return {"ok": False, "detail": "AI API-ключ не задан."}
+        try:
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                resp = await client.get(
+                    "https://generativelanguage.googleapis.com/v1beta/models",
+                    params={"key": key},
+                )
+            if resp.status_code == 200:
+                return {"ok": True, "provider": provider, "model": model, "detail": "Подключение к Gemini API подтверждено."}
+            return {
+                "ok": False,
+                "provider": provider,
+                "model": model,
+                "detail": redact_text(f"Gemini API вернул HTTP {resp.status_code}", [key]),
+            }
+        except Exception as exc:
+            return {"ok": False, "provider": provider, "model": model, "detail": redact_text(str(exc), [key])}
+
+    # openai_compatible
+    target_base = base_url.rstrip("/")
+    if not target_base:
+        return {"ok": False, "detail": "Не указан base_url для OpenAI-compatible провайдера."}
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.get(f"{target_base}/models", headers=headers)
+        if resp.status_code == 200:
+            return {"ok": True, "provider": provider, "model": model, "detail": "Подключение к OpenAI-compatible API подтверждено."}
+        return {
+            "ok": False,
+            "provider": provider,
+            "model": model,
+            "detail": redact_text(f"API вернул HTTP {resp.status_code}", [key] if key else None),
+        }
+    except Exception as exc:
+        return {"ok": False, "provider": provider, "model": model, "detail": redact_text(str(exc), [key] if key else None)}
+
+
+@router.delete("/ai")
+def delete_ai_integration(session: Session = Depends(get_session)):
+    row = session.get(IntegrationSetting, "ai")
+    if row:
+        session.delete(row)
+        session.commit()
+    return {"ok": True}
+
+
+@router.post("/telegram/test")
+async def test_telegram_integration(body: TelegramIntegrationTest, session: Session = Depends(get_session)):
+    row = session.get(IntegrationSetting, "telegram")
+    settings = get_settings()
+
+    token = normalize_bot_token(body.bot_token)
+    if not token and row and row.encrypted_secret:
+        try:
+            token = normalize_bot_token(decrypt(row.encrypted_secret))
+        except Exception:
+            token = ""
+    if not token:
+        token = normalize_bot_token(settings.telegram_bot_token)
+
+    chat_id = (body.chat_id or "").strip()
+    if not chat_id and row:
+        chat_id = str((row.config_json or {}).get("chat_id") or "").strip()
+    if not chat_id:
+        chat_id = (settings.telegram_chat_id or "").strip()
+
+    return await verify_telegram_connection(token, chat_id)
+
+
+@router.put("/telegram")
+async def save_telegram_integration(body: TelegramIntegrationUpdate, session: Session = Depends(get_session)):
+    row = session.get(IntegrationSetting, "telegram")
+    token = normalize_bot_token(body.bot_token)
+    if not token and row and row.encrypted_secret:
+        try:
+            token = normalize_bot_token(decrypt(row.encrypted_secret))
+        except Exception:
+            token = ""
+    if not token:
+        token = normalize_bot_token(get_settings().telegram_bot_token)
+
+    chat_id = body.chat_id.strip()
+    try:
+        validate_token_format(token)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not chat_id:
+        raise HTTPException(400, "Укажите chat_id для Telegram.")
+
+    bot_username = str((row.config_json or {}).get("bot_username") or "") if row else ""
+    verified = False
+    if body.verify:
+        check = await verify_telegram_connection(token, chat_id)
+        if not check.get("ok"):
+            raise HTTPException(400, str(check.get("error") or "Не удалось проверить подключение к Telegram"))
+        bot_username = str(check.get("bot_username") or "")
+        verified = True
+
+    if not row:
+        row = IntegrationSetting(kind="telegram")
+    row.enabled = body.enabled
+    row.auto_send = body.auto_send
+    row.encrypted_secret = encrypt(token)
+    row.config_json = {
+        "chat_id": chat_id,
+        "bot_username": bot_username,
+        "verified": verified,
+    }
+    row.updated_at = datetime.now(timezone.utc)
+    session.add(row)
+    session.commit()
+    return _read_telegram_status(session)
+
+
+@router.delete("/telegram")
+def delete_telegram_integration(session: Session = Depends(get_session)):
+    row = session.get(IntegrationSetting, "telegram")
+    if row:
+        session.delete(row)
+        session.commit()
+    return {"ok": True}
+
+
+@router.post("/telegram/send-run/{run_id}")
+async def send_run_to_telegram(run_id: str, session: Session = Depends(get_session)):
+    run = session.get(Run, run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+
+    tg = _read_telegram_status(session)
+    row = session.get(IntegrationSetting, "telegram")
+    settings = get_settings()
+
+    token = ""
+    if row and row.encrypted_secret:
+        try:
+            token = normalize_bot_token(decrypt(row.encrypted_secret))
+        except Exception:
+            token = ""
+    if not token:
+        token = normalize_bot_token(settings.telegram_bot_token)
+    chat_id = tg.get("chat_id") or settings.telegram_chat_id or ""
+
+    if not token or not chat_id:
+        raise HTTPException(400, "Telegram-интеграция не настроена. Укажите Bot Token и chat_id в разделе «Интеграции».")
+
+    findings = load_run_findings(run)
+    ai_rep = run.ai_report_json or {}
+    payload_report = {
+        "findings": findings,
+        "summary": ai_rep.get("summary"),
+        "items": ai_rep.get("items") or [],
+        "validation": ai_rep.get("validation") or {},
+    }
+    text = _format_message(payload_report, run.id)
+    try:
+        res = await send_telegram_message(token, chat_id, text)
+        return res
+    except Exception as exc:
+        raise HTTPException(502, redact_text(str(exc), [token])) from exc

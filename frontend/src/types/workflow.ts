@@ -111,9 +111,44 @@ export type AiReportDto = {
     dropped_items?: number;
     dropped_cve?: number;
     mode?: string;
+    ai_status?: string;
     fallback_reason?: string | null;
     errors?: string[];
   };
+};
+
+export type AiIntegrationDto = {
+  configured: boolean;
+  enabled: boolean;
+  source: string;
+  provider: string;
+  model: string;
+  base_url: string;
+  api_key_preview: string;
+};
+
+export type TelegramIntegrationDto = {
+  configured: boolean;
+  enabled: boolean;
+  auto_send: boolean;
+  source: string;
+  chat_id: string;
+  bot_token_preview: string;
+  bot_username: string;
+  verified: boolean;
+};
+
+export type IntegrationsDto = {
+  ai: AiIntegrationDto;
+  telegram: TelegramIntegrationDto;
+};
+
+export type IntegrationTestResult = {
+  ok: boolean;
+  detail?: string | null;
+  error?: string | null;
+  bot_username?: string;
+  chat_title?: string;
 };
 
 export type RunDto = {

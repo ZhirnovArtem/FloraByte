@@ -1,4 +1,4 @@
-"""findings.export — write report.json (organisers format) + report.md from same findings set."""
+"""findings.export — write report.json (organisers format) + enriched report.md (with optional AI analysis)."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from app.nodes.registry import register_node
 def _as_findings(val: Any) -> list[Finding]:
     if val is None:
         return []
+    if isinstance(val, dict) and "findings" in val:
+        val = val["findings"]
     if isinstance(val, list):
         out = []
         for item in val:
@@ -30,8 +32,27 @@ def _as_findings(val: Any) -> list[Finding]:
     return []
 
 
-def render_markdown(findings: list[Finding]) -> str:
+def _extract_ai_report(inputs: dict[str, Any]) -> dict[str, Any] | None:
+    for key in ("report", "in", "a", "b", "c"):
+        val = inputs.get(key)
+        if isinstance(val, dict) and ("items" in val or "summary" in val or "validation" in val):
+            return val
+    for val in inputs.values():
+        if isinstance(val, dict) and ("items" in val or "summary" in val or "validation" in val):
+            return val
+    return None
+
+
+def render_markdown(findings: list[Finding], ai_report: dict[str, Any] | None = None) -> str:
     lines = ["# Security findings report", ""]
+    if ai_report:
+        val = ai_report.get("validation") or {}
+        ai_status = val.get("ai_status") or ("LLM" if val.get("mode") == "llm" else "Fallback")
+        lines.append(f"**AI-анализ:** {ai_status}")
+        if ai_report.get("summary"):
+            lines.append(f"**Общее заключение:** {ai_report['summary']}")
+        lines.append("")
+
     if not findings:
         lines.append("Находок нет.")
         return "\n".join(lines)
@@ -52,15 +73,36 @@ def render_markdown(findings: list[Finding]) -> str:
         sev = f.severity or "—"
         lines.append(f"| {i} | {f.category} | `{f.path}` | {detail} | {line} | {sev} |")
 
+    ai_by_ref: dict[int, dict[str, Any]] = {}
+    if ai_report and isinstance(ai_report.get("items"), list):
+        for item in ai_report["items"]:
+            if isinstance(item, dict) and isinstance(item.get("finding_ref"), int):
+                ai_by_ref[item["finding_ref"]] = item
+
     lines.append("")
     for i, f in enumerate(findings, 1):
         lines.append(f"## {i}. {f.category} — {f.path}")
+        if f.severity:
+            lines.append(f"**Severity:** {f.severity}")
+        if f.line:
+            lines.append(f"**Line:** {f.line}")
         if f.description:
             lines.append(f"**Description:** {f.description}")
         if f.remediation:
             lines.append(f"**Remediation:** {f.remediation}")
         if f.evidence:
             lines.append(f"**Evidence (masked):** `{f.evidence}`")
+        ai_item = ai_by_ref.get(i - 1)
+        if ai_item:
+            if ai_item.get("explanation"):
+                lines.append(f"**AI-объяснение:** {ai_item['explanation']}")
+            if ai_item.get("risk"):
+                lines.append(f"**Возможные последствия:** {ai_item['risk']}")
+            steps = ai_item.get("fix_steps") or []
+            if steps:
+                lines.append("**Пошаговые рекомендации:**")
+                for step in steps:
+                    lines.append(f"- {step}")
         lines.append("")
     return "\n".join(lines)
 
@@ -76,6 +118,7 @@ class ReportExportNode(BaseNode):
     group = "findings"
     inputs = [
         Port(name="findings", kind="Findings"),
+        Port(name="report", kind="Report"),
         Port(name="in", kind="Findings"),
         Port(name="a", kind="Findings"),
     ]
@@ -83,21 +126,21 @@ class ReportExportNode(BaseNode):
     Params = Params
 
     async def run(self, ctx: NodeContext, inputs: dict[str, Any], params: BaseModel) -> dict[str, Any]:
+        ai_report = _extract_ai_report(inputs)
         findings: list[Finding] = []
-        for key in ("findings", "in", "a", "b", "c"):
+        for key in ("report", "findings", "in", "a", "b", "c"):
             if key in inputs:
                 findings = _as_findings(inputs[key])
-                if findings or key == "findings":
+                if findings or key in ("findings", "report"):
                     break
         if not findings:
-            # try any list value
             for v in inputs.values():
                 findings = _as_findings(v)
                 if findings:
                     break
 
         report_json = {"findings": [f.to_submission() for f in findings]}
-        report_md = render_markdown(findings)
+        report_md = render_markdown(findings, ai_report=ai_report)
 
         out_dir = Path(ctx.workspace) / "reports"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -106,13 +149,19 @@ class ReportExportNode(BaseNode):
         json_path.write_text(json.dumps(report_json, ensure_ascii=False, indent=2), encoding="utf-8")
         md_path.write_text(report_md, encoding="utf-8")
 
-        # Also copy to a stable place under runs for API download
-        return {
-            "report": {
-                "findings": report_json["findings"],
-                "report_json": report_json,
-                "report_md": report_md,
-                "json_path": str(json_path),
-                "md_path": str(md_path),
-            }
+        out_report: dict[str, Any] = {
+            "findings": report_json["findings"],
+            "report_json": report_json,
+            "report_md": report_md,
+            "json_path": str(json_path),
+            "md_path": str(md_path),
         }
+        if ai_report:
+            if "summary" in ai_report:
+                out_report["summary"] = ai_report["summary"]
+            if "items" in ai_report:
+                out_report["items"] = ai_report["items"]
+            if "validation" in ai_report:
+                out_report["validation"] = ai_report["validation"]
+
+        return {"report": out_report}

@@ -1,6 +1,6 @@
 {
   "name": "Git Repository Full Audit",
-  "description": "Manual → Git Clone (allowlisted) → Secrets + SCA + SAST → Merge → Export + AI Explain → Telegram (dry_run)",
+  "description": "Manual → Git Clone (allowlisted) → Secrets + SCA + SAST → Merge → AI Explain → Export Report → Telegram",
   "graph": {
     "nodes": [
       { "id": "t1", "type": "trigger.manual", "params": {}, "position": { "x": 40, "y": 200 } },
@@ -9,9 +9,9 @@
       { "id": "sc2", "type": "scanner.sca", "params": {}, "position": { "x": 430, "y": 200 } },
       { "id": "sc3", "type": "scanner.sast", "params": {}, "position": { "x": 430, "y": 320 } },
       { "id": "m1", "type": "findings.merge", "params": {}, "position": { "x": 640, "y": 200 } },
-      { "id": "e1", "type": "findings.export", "params": {}, "position": { "x": 840, "y": 90 } },
-      { "id": "ai1", "type": "ai.explain", "params": {}, "position": { "x": 840, "y": 290 } },
-      { "id": "tg1", "type": "notify.telegram", "params": { "dry_run": true }, "position": { "x": 1060, "y": 290 } }
+      { "id": "ai1", "type": "ai.explain", "params": {}, "position": { "x": 840, "y": 200 } },
+      { "id": "e1", "type": "findings.export", "params": {}, "position": { "x": 1040, "y": 200 } },
+      { "id": "tg1", "type": "notify.telegram", "params": { "dry_run": true }, "position": { "x": 1240, "y": 200 } }
     ],
     "edges": [
       { "id": "e1", "source": "t1", "target": "g1" },
@@ -21,9 +21,9 @@
       { "id": "e5", "source": "sc1", "target": "m1", "targetHandle": "a" },
       { "id": "e6", "source": "sc2", "target": "m1", "targetHandle": "b" },
       { "id": "e7", "source": "sc3", "target": "m1", "targetHandle": "c" },
-      { "id": "e8", "source": "m1", "target": "e1" },
-      { "id": "e9", "source": "m1", "sourceHandle": "findings", "target": "ai1", "targetHandle": "findings" },
-      { "id": "e10", "source": "ai1", "sourceHandle": "report", "target": "tg1", "targetHandle": "report" }
+      { "id": "e8", "source": "m1", "sourceHandle": "findings", "target": "ai1", "targetHandle": "findings" },
+      { "id": "e9", "source": "ai1", "sourceHandle": "report", "target": "e1", "targetHandle": "report" },
+      { "id": "e10", "source": "e1", "sourceHandle": "report", "target": "tg1", "targetHandle": "report" }
     ]
   }
 }

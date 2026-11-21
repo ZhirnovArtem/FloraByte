@@ -50,8 +50,15 @@ def _build_lines(run_id: str, status: str, findings: list[dict], ai_report: dict
         for wrapped in textwrap.wrap(str(ai_report.get("summary")), width=90):
             lines.append((wrapped, False))
         val = ai_report.get("validation") or {}
-        lines.append((f"AI Validation: mode={val.get('mode', 'unknown')} passed={val.get('passed')}", False))
+        ai_status = val.get("ai_status") or val.get("mode", "unknown")
+        lines.append((f"AI Status: {ai_status} (mode={val.get('mode', 'unknown')} passed={val.get('passed')})", False))
         lines.append(("", False))
+
+    ai_by_ref: dict[int, dict] = {}
+    if ai_report and isinstance(ai_report.get("items"), list):
+        for item in ai_report["items"]:
+            if isinstance(item, dict) and isinstance(item.get("finding_ref"), int):
+                ai_by_ref[item["finding_ref"]] = item
 
     lines.append((f"Findings ({len(findings)})", True))
     if not findings:
@@ -70,6 +77,17 @@ def _build_lines(run_id: str, status: str, findings: list[dict], ai_report: dict
             if desc:
                 for w in textwrap.wrap(f"   {desc}", width=92):
                     lines.append((w, False))
+            ai_item = ai_by_ref.get(idx - 1)
+            if ai_item:
+                if ai_item.get("explanation"):
+                    for w in textwrap.wrap(f"   AI Explanation: {ai_item['explanation']}", width=92):
+                        lines.append((w, False))
+                if ai_item.get("risk"):
+                    for w in textwrap.wrap(f"   Impact / Risk: {ai_item['risk']}", width=92):
+                        lines.append((w, False))
+                for step in ai_item.get("fix_steps") or []:
+                    for w in textwrap.wrap(f"   Fix: {step}", width=92):
+                        lines.append((w, False))
     return lines
 
 
