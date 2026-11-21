@@ -147,11 +147,12 @@ function WorkflowEditorContent() {
   const [findings, setFindings] = useState<FindingDto[]>([]);
   const [reportMd, setReportMd] = useState<string>('');
   const [wsEvents, setWsEvents] = useState<WsRunEvent[]>([]);
+  const [runsHistory, setRunsHistory] = useState<RunDto[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pollTimerRef = useRef<number | null>(null);
-  const { deleteElements } = useReactFlow();
+  const { deleteElements, screenToFlowPosition } = useReactFlow();
 
   const stopPolling = useCallback(() => {
     if (pollTimerRef.current !== null) {
@@ -162,6 +163,11 @@ function WorkflowEditorContent() {
 
   const specByType = useMemo(() => new Map(catalog.map((c) => [c.type, c])), [catalog]);
   const selectedNode = nodes.find((node) => node.selected) ?? null;
+
+  const refreshRunsHistory = useCallback(async () => {
+    const list = await api.listRuns(20).catch(() => []);
+    setRunsHistory(list);
+  }, []);
 
   const syncRunState = useCallback(async (runId: string): Promise<RunDto | null> => {
     try {
@@ -198,6 +204,7 @@ function WorkflowEditorContent() {
         setFindings(repJson.findings ?? runDetails.summary?.report?.findings ?? []);
         setReportMd(repMd);
         setPanelOpen(true);
+        void refreshRunsHistory();
       }
       return runDetails;
     } catch (err) {
@@ -205,7 +212,7 @@ function WorkflowEditorContent() {
       setStatusMsg(`Не удалось загрузить результаты запуска: ${msg}`);
       return null;
     }
-  }, [setNodes, stopPolling]);
+  }, [refreshRunsHistory, setNodes, stopPolling]);
 
   const startPollingRun = useCallback((runId: string) => {
     stopPolling();
@@ -267,15 +274,17 @@ function WorkflowEditorContent() {
     wsRef.current = ws;
   }, [setNodes, startPollingRun, stopPolling, syncRunState]);
 
+  const starterCount = starter.nodes.length;
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [nodeTypesRes, tpls, wfs, creds] = await Promise.all([
+        const [nodeTypesRes, tpls, wfs, creds, hist] = await Promise.all([
           api.fetchNodeTypes(),
           api.listTemplates().catch(() => []),
           api.listWorkflows().catch(() => []),
           api.listCredentials().catch(() => []),
+          api.listRuns(20).catch(() => []),
         ]);
         if (cancelled) return;
         if (nodeTypesRes.length > 0) {
@@ -284,12 +293,13 @@ function WorkflowEditorContent() {
           // Enrich starter nodes with real ports/labels from backend
           const freshStarter = buildStarterNodes(nodeTypesRes);
           setNodes((curr) =>
-            curr.length === starter.nodes.length ? freshStarter.nodes : curr,
+            curr.length === starterCount ? freshStarter.nodes : curr,
           );
         }
         setTemplates(tpls);
         setWorkflows(wfs);
         setCredentials(creds);
+        setRunsHistory(hist);
 
         // Restore active run if page was reloaded mid-execution
         const savedRunId = sessionStorage.getItem(ACTIVE_RUN_KEY);
@@ -313,7 +323,7 @@ function WorkflowEditorContent() {
       wsRef.current?.close();
       stopPolling();
     };
-  }, []);
+  }, [attachToRun, setNodes, starterCount, stopPolling, syncRunState]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -327,25 +337,46 @@ function WorkflowEditorContent() {
     [setEdges, nodes, edges],
   );
 
-  const addNode = (spec: NodeTypeSpec) => {
-    const newNode: SecurityNodeType = {
-      id: `n-${crypto.randomUUID().slice(0, 8)}`,
-      type: 'security',
-      position: {
-        x: 150 + Math.round(Math.random() * 260),
-        y: 120 + Math.round(Math.random() * 240),
-      },
-      data: {
-        label: spec.label,
-        kind: spec.type,
-        group: spec.group,
-        inputs: spec.inputs,
-        outputs: spec.outputs,
-        params: defaultParamsFromSpec(spec),
-      },
-    };
-    setNodes((curr) => [...curr, newNode]);
-  };
+  const addNode = useCallback(
+    (spec: NodeTypeSpec, position?: { x: number; y: number }) => {
+      const newNode: SecurityNodeType = {
+        id: `n-${crypto.randomUUID().slice(0, 8)}`,
+        type: 'security',
+        position: position ?? {
+          x: 150 + Math.round(Math.random() * 260),
+          y: 120 + Math.round(Math.random() * 240),
+        },
+        data: {
+          label: spec.label,
+          kind: spec.type,
+          group: spec.group,
+          inputs: spec.inputs,
+          outputs: spec.outputs,
+          params: defaultParamsFromSpec(spec),
+        },
+      };
+      setNodes((curr) => [...curr, newNode]);
+    },
+    [setNodes],
+  );
+
+  const onCanvasDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  }, []);
+
+  const onCanvasDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const nodeType = e.dataTransfer.getData('application/florabyte-node');
+      if (!nodeType) return;
+      const spec = specByType.get(nodeType);
+      if (!spec) return;
+      const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      addNode(spec, { x: Math.round(pos.x), y: Math.round(pos.y) });
+    },
+    [addNode, screenToFlowPosition, specByType],
+  );
 
   const deleteSelected = async () => {
     await deleteElements({
@@ -785,7 +816,11 @@ function WorkflowEditorContent() {
           onApplyTemplate={applyTemplate}
         />
 
-        <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+        <div
+          style={{ flex: 1, minWidth: 0, position: 'relative' }}
+          onDragOver={onCanvasDragOver}
+          onDrop={onCanvasDrop}
+        >
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -809,7 +844,7 @@ function WorkflowEditorContent() {
         </div>
 
         <NodeSettings
-          key={selectedNode?.id ?? 'none'}
+          key={`${selectedNode?.id ?? 'none'}-${String(selectedNode?.data.params?.upload_id ?? '')}`}
           selectedNode={selectedNode}
           nodeSpec={selectedNode ? specByType.get(selectedNode.data.kind) : undefined}
           credentials={credentials}
@@ -824,8 +859,14 @@ function WorkflowEditorContent() {
         findings={findings}
         reportMd={reportMd}
         events={wsEvents}
+        runsHistory={runsHistory}
         isOpen={panelOpen}
         onToggle={() => setPanelOpen((o) => !o)}
+        onSelectRun={(runId) => {
+          setWsEvents([]);
+          void syncRunState(runId);
+        }}
+        onRefreshHistory={() => void refreshRunsHistory()}
       />
     </div>
   );

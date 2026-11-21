@@ -7,8 +7,11 @@ type ReportPanelProps = {
   findings: FindingDto[];
   reportMd: string;
   events: WsRunEvent[];
+  runsHistory: RunDto[];
   isOpen: boolean;
   onToggle: () => void;
+  onSelectRun?: (runId: string) => void;
+  onRefreshHistory?: () => void;
 };
 
 const SEV_COLORS: Record<string, { bg: string; fg: string }> = {
@@ -23,11 +26,15 @@ export default function ReportPanel({
   findings,
   reportMd,
   events,
+  runsHistory,
   isOpen,
   onToggle,
+  onSelectRun,
+  onRefreshHistory,
 }: ReportPanelProps) {
-  const [tab, setTab] = useState<'findings' | 'ai' | 'markdown' | 'log'>('findings');
+  const [tab, setTab] = useState<'findings' | 'ai' | 'markdown' | 'log' | 'history'>('findings');
   const [catFilter, setCatFilter] = useState<string>('ALL');
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
 
   const ai: AiReportDto | null = run?.ai_report ?? null;
   const filtered = catFilter === 'ALL' ? findings : findings.filter((f) => f.category === catFilter);
@@ -81,10 +88,13 @@ export default function ReportPanel({
 
         {isOpen && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {(['findings', 'ai', 'markdown', 'log'] as const).map((t) => (
+            {(['findings', 'ai', 'markdown', 'log', 'history'] as const).map((t) => (
               <button
                 key={t}
-                onClick={() => setTab(t)}
+                onClick={() => {
+                  setTab(t);
+                  if (t === 'history' && onRefreshHistory) onRefreshHistory();
+                }}
                 style={{
                   padding: '4px 10px',
                   borderRadius: 6,
@@ -100,6 +110,7 @@ export default function ReportPanel({
                 {t === 'ai' && `AI-отчёт${ai ? ` (${ai.items.length})` : ''}`}
                 {t === 'markdown' && 'Markdown'}
                 {t === 'log' && `WS лог (${events.length})`}
+                {t === 'history' && `История (${runsHistory.length})`}
               </button>
             ))}
 
@@ -107,14 +118,20 @@ export default function ReportPanel({
               <>
                 <a
                   href="#"
-                  onClick={(e) => { e.preventDefault(); void downloadRunReport(run.id, 'json').catch((error: Error) => alert(error.message)); }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void downloadRunReport(run.id, 'json').catch((error: Error) => alert(error.message));
+                  }}
                   style={{ fontSize: 12, color: '#2563eb', marginLeft: 8, textDecoration: 'none', fontWeight: 600 }}
                 >
                   ↓ report.json
                 </a>
                 <a
                   href="#"
-                  onClick={(e) => { e.preventDefault(); void downloadRunReport(run.id, 'md').catch((error: Error) => alert(error.message)); }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void downloadRunReport(run.id, 'md').catch((error: Error) => alert(error.message));
+                  }}
                   style={{ fontSize: 12, color: '#2563eb', marginLeft: 4, textDecoration: 'none', fontWeight: 600 }}
                 >
                   ↓ report.md
@@ -133,7 +150,10 @@ export default function ReportPanel({
                 {['ALL', 'SECRET', 'SCA', 'SAST'].map((c) => (
                   <button
                     key={c}
-                    onClick={() => setCatFilter(c)}
+                    onClick={() => {
+                      setCatFilter(c);
+                      setExpandedIdx(null);
+                    }}
                     style={{
                       padding: '3px 10px',
                       borderRadius: 999,
@@ -173,8 +193,18 @@ export default function ReportPanel({
                         f.category === 'SCA'
                           ? `${f.group}:${f.artifact}@${f.version} (${f.advisoryId})`
                           : f.class ?? '—';
+                      const isExpanded = expandedIdx === idx;
                       return (
-                        <tr key={`${f.path}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <tr
+                          key={`${f.path}-${idx}`}
+                          onClick={() => setExpandedIdx(isExpanded ? null : idx)}
+                          style={{
+                            borderBottom: '1px solid #f1f5f9',
+                            cursor: 'pointer',
+                            background: isExpanded ? '#f8fafc' : 'transparent',
+                          }}
+                          title="Нажмите для подробностей"
+                        >
                           <td style={{ padding: '6px 8px', fontWeight: 700 }}>{f.category}</td>
                           <td style={{ padding: '6px 8px' }}>
                             <span
@@ -192,8 +222,17 @@ export default function ReportPanel({
                           </td>
                           <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{f.path}</td>
                           <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{detail}</td>
-                          <td style={{ padding: '6px 8px' }}>{f.line ?? '—'}</td>
-                          <td style={{ padding: '6px 8px', color: '#334155' }}>{f.description ?? '—'}</td>
+                          <td style={{ padding: '6px 8px' }}>
+                            {f.line ? (f.endLine && f.endLine !== f.line ? `${f.line}–${f.endLine}` : f.line) : '—'}
+                          </td>
+                          <td style={{ padding: '6px 8px', color: '#334155' }}>
+                            <div>{f.description ?? '—'}</div>
+                            {isExpanded && f.remediation && (
+                              <div style={{ marginTop: 6, padding: 6, background: '#eff6ff', borderRadius: 6, color: '#1e3a8a' }}>
+                                <strong>Рекомендация:</strong> {f.remediation}
+                              </div>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
@@ -235,7 +274,7 @@ export default function ReportPanel({
                         }}
                       >
                         {ai.validation.mode === 'llm'
-                          ? 'Режим: LLM (Gemini)'
+                          ? 'Режим: LLM'
                           : ai.validation.mode === 'empty'
                           ? 'Режим: Нет находок'
                           : 'Режим: Fallback (без LLM)'}{' '}
@@ -321,6 +360,61 @@ export default function ReportPanel({
                     {ev.error ? ` ERROR: ${ev.error}` : ''}
                   </div>
                 ))
+              )}
+            </div>
+          )}
+
+          {tab === 'history' && (
+            <div>
+              {runsHistory.length === 0 ? (
+                <div style={{ color: '#64748b', fontSize: 13 }}>Запусков пока нет.</div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left', borderBottom: '2px solid #e2e8f0', color: '#475569' }}>
+                      <th style={{ padding: '6px 8px' }}>Run ID</th>
+                      <th style={{ padding: '6px 8px' }}>Статус</th>
+                      <th style={{ padding: '6px 8px' }}>Триггер</th>
+                      <th style={{ padding: '6px 8px' }}>Находок</th>
+                      <th style={{ padding: '6px 8px' }}>Запущен</th>
+                      <th style={{ padding: '6px 8px' }}>Действие</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {runsHistory.map((item) => (
+                      <tr key={item.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{item.id.slice(0, 8)}</td>
+                        <td style={{ padding: '6px 8px', fontWeight: 700 }}>{item.status}</td>
+                        <td style={{ padding: '6px 8px' }}>{item.trigger}</td>
+                        <td style={{ padding: '6px 8px' }}>{item.summary?.report?.findings_count ?? '—'}</td>
+                        <td style={{ padding: '6px 8px' }}>{item.started_at ? item.started_at.replace('T', ' ').slice(0, 19) : '—'}</td>
+                        <td style={{ padding: '6px 8px' }}>
+                          {onSelectRun && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onSelectRun(item.id);
+                                setTab('findings');
+                              }}
+                              style={{
+                                padding: '3px 8px',
+                                fontSize: 11,
+                                borderRadius: 6,
+                                border: '1px solid #cbd5e1',
+                                background: '#eff6ff',
+                                color: '#1d4ed8',
+                                cursor: 'pointer',
+                                fontWeight: 600,
+                              }}
+                            >
+                              Открыть
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )}
             </div>
           )}

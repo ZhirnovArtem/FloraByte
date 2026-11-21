@@ -106,6 +106,11 @@ export default function NodeSidebar({
           {(grouped.get(group) ?? []).map((item) => (
             <button
               key={item.type}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData('application/florabyte-node', item.type);
+                e.dataTransfer.effectAllowed = 'move';
+              }}
               onClick={() => onAddNode(item)}
               style={{
                 display: 'block',
@@ -116,8 +121,9 @@ export default function NodeSidebar({
                 background: '#ffffff',
                 border: '1px solid #cbd5e1',
                 borderRadius: 8,
-                cursor: 'pointer',
+                cursor: 'grab',
               }}
+              title="Нажмите или перетащите блок на схему"
             >
               <strong style={{ fontSize: 13 }}>{item.label}</strong>
               <div style={{ fontSize: 11, color: '#64748b', marginTop: 2, fontFamily: 'monospace' }}>

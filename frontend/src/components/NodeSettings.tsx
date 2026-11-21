@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { CredentialDto, NodeTypeSpec } from '../types/workflow';
 import type { SecurityNodeType } from './SecurityNode';
 
@@ -19,34 +19,12 @@ export default function NodeSettings({
   onUploadZip,
   onCreateCredential,
 }: NodeSettingsProps) {
-  const [label, setLabel] = useState('');
-  const [params, setParams] = useState<Record<string, unknown>>({});
-  const [isDirty, setIsDirty] = useState(false);
+  const [label, setLabel] = useState<string>(selectedNode?.data.label ?? '');
+  const [params, setParams] = useState<Record<string, unknown>>({ ...(selectedNode?.data.params ?? {}) });
   const [uploading, setUploading] = useState(false);
   const [credName, setCredName] = useState('');
   const [credValue, setCredValue] = useState('');
   const [showNewCred, setShowNewCred] = useState(false);
-
-  useEffect(() => {
-    if (!selectedNode) {
-      setLabel('');
-      setParams({});
-      setIsDirty(false);
-      return;
-    }
-    setLabel(selectedNode.data.label);
-    setParams({ ...(selectedNode.data.params ?? {}) });
-    setIsDirty(false);
-  }, [selectedNode?.id]);
-
-  // Sync external updates (e.g. upload_id injected from toolbar) when user has no unsaved edits
-  const externalParamsJson = JSON.stringify(selectedNode?.data.params ?? {});
-  const externalLabel = selectedNode?.data.label ?? '';
-  useEffect(() => {
-    if (!selectedNode || isDirty) return;
-    setLabel(externalLabel);
-    setParams({ ...(selectedNode.data.params ?? {}) });
-  }, [externalParamsJson, externalLabel]);
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
@@ -80,7 +58,6 @@ export default function NodeSettings({
   const kind = selectedNode.data.kind;
 
   const updateParam = (key: string, value: unknown) => {
-    setIsDirty(true);
     setParams((curr) => ({ ...curr, [key]: value }));
   };
 
@@ -91,8 +68,9 @@ export default function NodeSettings({
     try {
       const uploadId = await onUploadZip(file);
       if (uploadId) {
-        updateParam('upload_id', uploadId);
-        onSave(selectedNode.id, label, { ...params, upload_id: uploadId });
+        const nextParams = { ...params, upload_id: uploadId };
+        setParams(nextParams);
+        onSave(selectedNode.id, label, nextParams);
       }
     } finally {
       setUploading(false);
@@ -139,10 +117,7 @@ export default function NodeSettings({
         <input
           style={inputStyle}
           value={label}
-          onChange={(e) => {
-            setIsDirty(true);
-            setLabel(e.target.value);
-          }}
+          onChange={(e) => setLabel(e.target.value)}
         />
       </label>
 
@@ -300,10 +275,7 @@ export default function NodeSettings({
       })}
 
       <button
-        onClick={() => {
-          setIsDirty(false);
-          onSave(selectedNode.id, label, params);
-        }}
+        onClick={() => onSave(selectedNode.id, label, params)}
         style={{
           width: '100%',
           padding: 10,

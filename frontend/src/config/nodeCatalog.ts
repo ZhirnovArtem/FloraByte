@@ -19,8 +19,8 @@ export const fallbackNodeCatalog: NodeTypeSpec[] = [
     params_schema: {
       type: 'object',
       properties: {
-        interval_sec: { type: 'integer', default: 0, description: 'Interval in seconds (0 = use cron)' },
-        cron: { type: 'string', default: '', description: 'Cron expression e.g. "0 */6 * * *"' },
+        cron: { type: 'string', default: '', description: 'Cron expression e.g. "0 9 * * 1-5"' },
+        interval_seconds: { type: 'integer', default: 0, description: 'Alternative: fixed interval in seconds' },
       },
     },
   },
@@ -191,6 +191,7 @@ export const fallbackNodeCatalog: NodeTypeSpec[] = [
         credential_id: { type: 'string', default: '' },
         model: { type: 'string', default: '' },
         provider: { type: 'string', default: '' },
+        base_url: { type: 'string', default: '' },
       },
     },
   },
@@ -225,7 +226,7 @@ export const fallbackNodeCatalog: NodeTypeSpec[] = [
       properties: {
         url: { type: 'string', default: '' },
         credential_id: { type: 'string', default: '' },
-        method: { type: 'string', default: 'POST' },
+        headers_json: { type: 'string', default: '{}' },
       },
     },
   },
