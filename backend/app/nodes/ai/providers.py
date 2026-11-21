@@ -6,9 +6,11 @@ import base64
 import json
 import logging
 import os
+import ssl
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -581,9 +583,25 @@ class GigaChatAdapter(BaseProviderAdapter):
         return cleaned
 
     @staticmethod
-    def _ssl_verify() -> bool:
+    def _ssl_verify() -> ssl.SSLContext | bool:
         val = os.getenv("GIGACHAT_VERIFY_SSL", "1").strip().lower()
-        return val not in ("0", "false", "no")
+        if val in ("0", "false", "no"):
+            return False
+
+        custom_ca = os.getenv("GIGACHAT_CA_BUNDLE", "").strip()
+        bundled_ca = Path(__file__).resolve().parent / "certs" / "russian_trusted_ca.crt"
+        try:
+            import certifi
+
+            ctx = ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            ctx = ssl.create_default_context()
+
+        if custom_ca and Path(custom_ca).is_file():
+            ctx.load_verify_locations(cafile=custom_ca)
+        elif bundled_ca.is_file():
+            ctx.load_verify_locations(cafile=str(bundled_ca))
+        return ctx
 
     async def _fetch_access_token(self, client: httpx.AsyncClient, raw_key: str) -> str:
         basic = self._basic_credentials(raw_key)

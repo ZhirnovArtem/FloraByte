@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -19,7 +20,7 @@ from app.core.pdf_export import render_report_pdf
 from app.main import app
 from app.nodes.ai.explain import AiExplainNode
 from app.nodes.ai.explain import Params as AiParams
-from app.nodes.ai.providers import AIProviderManager, BaseProviderAdapter, ProviderSpec
+from app.nodes.ai.providers import AIProviderManager, BaseProviderAdapter, GigaChatAdapter, PROVIDER_SPECS, ProviderSpec
 from app.nodes.base import NodeContext
 from app.nodes.findings.report_export import ReportExportNode
 from app.nodes.findings.report_export import Params as ExportParams
@@ -386,3 +387,20 @@ async def test_unified_exports_markdown_pdf_and_telegram(ai_client, tmp_path):
     tg_text = _format_message(rep, "r-export")
     assert "Anthropic Claude" in tg_text
     assert "Приоритет: HIGH" in tg_text
+
+
+def test_gigachat_ssl_verify_includes_russian_trusted_ca():
+    ctx = GigaChatAdapter._ssl_verify()
+    assert isinstance(ctx, ssl.SSLContext)
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    ca_certs = ctx.get_ca_certs()
+    cn_list = [
+        val
+        for cert in ca_certs
+        for rdn in cert.get("subject", ())
+        for key, val in rdn
+        if key == "commonName"
+    ]
+    assert "Russian Trusted Root CA" in cn_list
+    assert "Russian Trusted Sub CA" in cn_list
+
