@@ -6,6 +6,7 @@ import type {
   CredentialDto,
   CustomNodeDto,
   CustomNodeValidateDto,
+  EmailIntegrationDto,
   FindingDto,
   GeneratedWorkflowDto,
   IntegrationsDto,
@@ -496,6 +497,56 @@ export async function deleteTelegramIntegration(): Promise<void> {
 export async function sendRunToTelegram(runId: string): Promise<{ sent: boolean; chat_id: string }> {
   return requestJson<{ sent: boolean; chat_id: string }>(
     `/api/integrations/telegram/send-run/${encodeURIComponent(runId)}`,
+    { method: 'POST' },
+  );
+}
+
+export async function saveEmailIntegration(payload: {
+  transport: 'resend' | 'smtp';
+  smtp_host?: string;
+  smtp_port?: number;
+  smtp_user?: string;
+  from_email?: string;
+  default_to: string;
+  use_tls?: boolean;
+  secret?: string;
+  enabled?: boolean;
+}): Promise<EmailIntegrationDto> {
+  return requestJson<EmailIntegrationDto>('/api/integrations/email', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function testEmailIntegration(payload: {
+  transport: 'resend' | 'smtp';
+  smtp_host?: string;
+  smtp_port?: number;
+  smtp_user?: string;
+  from_email?: string;
+  default_to: string;
+  use_tls?: boolean;
+  secret?: string;
+}): Promise<IntegrationTestResult> {
+  return requestJson<IntegrationTestResult>('/api/integrations/email/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteEmailIntegration(): Promise<void> {
+  await requestJson<{ ok: boolean }>('/api/integrations/email', { method: 'DELETE' });
+}
+
+export async function sendRunToEmail(
+  runId: string,
+  toEmail?: string,
+): Promise<{ sent: boolean; to_email: string; transport?: string }> {
+  const qs = toEmail ? `?to_email=${encodeURIComponent(toEmail)}` : '';
+  return requestJson<{ sent: boolean; to_email: string; transport?: string }>(
+    `/api/integrations/email/send-run/${encodeURIComponent(runId)}${qs}`,
     { method: 'POST' },
   );
 }

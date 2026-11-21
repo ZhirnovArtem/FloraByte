@@ -230,9 +230,24 @@ export type TelegramIntegrationDto = {
   verified: boolean;
 };
 
+export type EmailIntegrationDto = {
+  configured: boolean;
+  enabled: boolean;
+  source: string;
+  transport: string;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_user: string;
+  from_email: string;
+  default_to: string;
+  use_tls: boolean;
+  secret_preview: string;
+};
+
 export type IntegrationsDto = {
   ai: AiIntegrationDto;
   telegram: TelegramIntegrationDto;
+  email?: EmailIntegrationDto;
 };
 
 export type IntegrationTestResult = {

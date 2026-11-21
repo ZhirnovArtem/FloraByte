@@ -172,3 +172,109 @@ def test_llm_invalid_cyclic_graph_falls_back_cleanly_while_valid_llm_graph_accep
             assert body2["provider"] == "gemini"
             assert body2["name"] == "LLM Ежедневная проверка"
             validate_graph(body2["graph"], NODE_REGISTRY)
+
+
+def test_email_integration_smtp_ssl_and_resend_and_send_run(ai_gen_client: TestClient):
+    from unittest.mock import MagicMock
+
+    # 1. Save Resend email integration (encrypted per-user)
+    saved = ai_gen_client.put(
+        "/api/integrations/email",
+        json={
+            "transport": "resend",
+            "from_email": "onboarding@resend.dev",
+            "default_to": "reports@company.com",
+            "secret": "re_test_1234567890abcdef",
+            "enabled": True,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    st = saved.json()
+    assert st["configured"] is True
+    assert st["transport"] == "resend"
+    assert st["default_to"] == "reports@company.com"
+    assert "re_test_1234567890abcdef" not in json.dumps(st)
+
+    # 2. AI generator automatically sets dry_run=False and fills default_to from saved Email integration
+    gen = ai_gen_client.post(
+        "/api/ai/generate-workflow",
+        json={"prompt": "Проверь архив на секреты и отправь отчет на почту"},
+    )
+    assert gen.status_code == 200
+    g = gen.json()["graph"]
+    email_node = next(n for n in g["nodes"] if n["type"] == "notify.email")
+    assert email_node["params"]["dry_run"] is False
+    assert email_node["params"]["to_email"] == "reports@company.com"
+
+    # 3. Execute workflow with mocked Resend HTTPS POST and verify email was actually sent
+    up_id = ai_gen_client.post("/api/uploads", files={"file": ("app.zip", _sample_zip(), "application/zip")}).json()["upload_id"]
+    for n in g["nodes"]:
+        if n["type"] == "source.upload_zip":
+            n["params"]["upload_id"] = up_id
+
+    sent_payloads = []
+
+    class FakeResp:
+        status_code = 200
+        text = '{"id": "email_123"}'
+
+        def json(self):
+            return {"id": "email_123"}
+
+    class FakeAsyncClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            sent_payloads.append({"url": url, "headers": headers, "json": json})
+            return FakeResp()
+
+    wf_id = ai_gen_client.post("/api/workflows", json={"name": "email-resend", "graph_json": g}).json()["id"]
+    with patch("app.nodes.notify.email.httpx.AsyncClient", FakeAsyncClient):
+        run_res = ai_gen_client.post(f"/api/workflows/{wf_id}/run?wait=true")
+        assert run_res.status_code == 200
+        run_id = run_res.json()["run_id"]
+        run_data = ai_gen_client.get(f"/api/runs/{run_id}").json()
+        assert run_data["status"] == "success"
+        assert len(sent_payloads) == 1
+        assert sent_payloads[0]["url"] == "https://api.resend.com/emails"
+        assert sent_payloads[0]["json"]["to"] == ["reports@company.com"]
+        assert "FloraByte Security Report" in sent_payloads[0]["json"]["text"]
+
+        # On-demand send-run endpoint also works
+        sr = ai_gen_client.post(f"/api/integrations/email/send-run/{run_id}")
+        assert sr.status_code == 200
+        assert sr.json()["sent"] is True
+        assert len(sent_payloads) == 2
+
+    # 4. SMTP port 465 uses SMTP_SSL cleanly
+    smtp_save = ai_gen_client.put(
+        "/api/integrations/email",
+        json={
+            "transport": "smtp",
+            "smtp_host": "smtp.yandex.ru",
+            "smtp_port": 465,
+            "smtp_user": "sec@yandex.ru",
+            "from_email": "sec@yandex.ru",
+            "default_to": "reports@company.com",
+            "secret": "app-pass-465",
+            "enabled": True,
+        },
+    )
+    assert smtp_save.status_code == 200
+    ssl_mock = MagicMock()
+    with patch("app.nodes.notify.email.smtplib.SMTP_SSL", return_value=ssl_mock) as smtp_ssl_cls:
+        test_res = ai_gen_client.post(
+            "/api/integrations/email/test",
+            json={"transport": "smtp", "smtp_host": "smtp.yandex.ru", "smtp_port": 465, "default_to": "reports@company.com"},
+        )
+        assert test_res.status_code == 200
+        assert test_res.json()["ok"] is True
+        smtp_ssl_cls.assert_called_once_with("smtp.yandex.ru", 465, timeout=15)
+

@@ -21,6 +21,11 @@ from app.core.models import IntegrationSetting, Run, User
 from app.core.run_analytics import load_run_findings
 from app.nodes.ai.llm_client import is_private_or_local_url
 from app.nodes.ai.providers import PROVIDER_SPECS, provider_manager
+from app.nodes.notify.email import (
+    extract_email_report_summary,
+    resolve_email_runtime_config,
+    send_email_message,
+)
 from app.nodes.notify.telegram import (
     _format_message,
     normalize_bot_token,
@@ -69,6 +74,29 @@ class TelegramIntegrationUpdate(BaseModel):
 class TelegramIntegrationTest(BaseModel):
     bot_token: str = ""
     chat_id: str = ""
+
+
+class EmailIntegrationUpdate(BaseModel):
+    transport: str = Field("resend", description="resend | smtp")
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    from_email: str = ""
+    default_to: str = ""
+    use_tls: bool = True
+    secret: str = Field("", description="Resend API key or SMTP password (keeps existing if blank)")
+    enabled: bool = True
+
+
+class EmailIntegrationTest(BaseModel):
+    transport: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    from_email: str = ""
+    default_to: str = ""
+    use_tls: bool = True
+    secret: str = ""
 
 
 def _integ_key(user: Optional[User], kind: str) -> str:
@@ -231,6 +259,30 @@ def _read_telegram_status(session: Session, user: Optional[User] = None) -> dict
     }
 
 
+def _read_email_status(session: Session, user: Optional[User] = None) -> dict[str, Any]:
+    cfg = resolve_email_runtime_config(owner_id=user.id if user else None)
+    row = _get_integ_row(session, user, "email")
+    transport = cfg["transport"]
+    secret = cfg["secret"]
+    configured = bool(
+        (transport == "resend" and secret and cfg["default_to"])
+        or (transport == "smtp" and cfg["smtp_host"] and cfg["default_to"])
+    )
+    return {
+        "configured": configured,
+        "enabled": row.enabled if row else configured,
+        "source": cfg["source"],
+        "transport": transport,
+        "smtp_host": cfg["smtp_host"],
+        "smtp_port": cfg["smtp_port"],
+        "smtp_user": cfg["smtp_user"],
+        "from_email": cfg["from_email"],
+        "default_to": cfg["default_to"],
+        "use_tls": cfg["use_tls"],
+        "secret_preview": mask_secret(secret, keep_last=4) if secret else "",
+    }
+
+
 @router.get("")
 def get_integrations(
     session: Session = Depends(get_session),
@@ -239,6 +291,7 @@ def get_integrations(
     return {
         "ai": _read_ai_status(session, user),
         "telegram": _read_telegram_status(session, user),
+        "email": _read_email_status(session, user),
     }
 
 
@@ -557,3 +610,141 @@ async def send_run_to_telegram(
         return res
     except Exception as exc:
         raise HTTPException(502, redact_text(str(exc), [token])) from exc
+
+
+def _merge_email_test_cfg(session: Session, user: Optional[User], body: EmailIntegrationTest) -> dict[str, Any]:
+    saved = resolve_email_runtime_config(owner_id=user.id if user else None)
+    transport = (body.transport or saved["transport"] or "smtp").strip().lower()
+    if transport not in ("smtp", "resend"):
+        raise HTTPException(400, f"Неизвестный транспорт почты: {transport}")
+    secret = body.secret.strip() or saved["secret"]
+    from_email = body.from_email.strip() or saved["from_email"]
+    if transport == "resend" and (not from_email or from_email == "noreply@florabyte.local"):
+        from_email = "onboarding@resend.dev"
+    return {
+        "transport": transport,
+        "smtp_host": body.smtp_host.strip() or saved["smtp_host"],
+        "smtp_port": int(body.smtp_port or saved["smtp_port"] or 587),
+        "smtp_user": body.smtp_user.strip() or saved["smtp_user"],
+        "use_tls": body.use_tls if body.smtp_host.strip() else saved["use_tls"],
+        "from_email": from_email,
+        "default_to": body.default_to.strip() or saved["default_to"],
+        "secret": secret,
+    }
+
+
+@router.post("/email/test")
+async def test_email_integration(
+    body: EmailIntegrationTest,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
+    cfg = _merge_email_test_cfg(session, user, body)
+    try:
+        res = await send_email_message(
+            cfg=cfg,
+            to_addr=cfg["default_to"],
+            subject="FloraByte — проверка отправки отчёта на почту",
+            body="Тестовое письмо от FloraByte AI Security Workflow. Настройка почты работает корректно.",
+        )
+        return {
+            "ok": True,
+            "detail": f"Тестовое письмо отправлено на {res['to_email']} ({res['transport']}).",
+        }
+    except Exception as exc:
+        return {"ok": False, "error": redact_text(str(exc), [cfg.get("secret", "")])}
+
+
+@router.put("/email")
+def save_email_integration(
+    body: EmailIntegrationUpdate,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
+    transport = body.transport.strip().lower()
+    if transport not in ("smtp", "resend"):
+        raise HTTPException(400, "Допустимые транспорты: resend или smtp")
+    if not body.default_to.strip():
+        raise HTTPException(400, "Укажите email получателя по умолчанию.")
+    if transport == "smtp" and not body.smtp_host.strip():
+        raise HTTPException(400, "Укажите SMTP-сервер (например smtp.gmail.com или smtp.yandex.ru).")
+
+    key = _integ_key(user, "email")
+    row = session.get(IntegrationSetting, key)
+    secret = body.secret.strip()
+    if not secret and row and row.encrypted_secret:
+        try:
+            secret = decrypt(row.encrypted_secret).strip()
+        except Exception:
+            secret = ""
+    if transport == "resend" and not secret:
+        raise HTTPException(400, "Укажите API-ключ Resend (re_...).")
+
+    from_email = body.from_email.strip()
+    if not from_email:
+        from_email = "onboarding@resend.dev" if transport == "resend" else (body.smtp_user.strip() or "noreply@florabyte.local")
+
+    if not row:
+        row = IntegrationSetting(kind=key)
+    row.enabled = body.enabled
+    row.encrypted_secret = encrypt(secret) if secret else ""
+    row.config_json = {
+        "transport": transport,
+        "smtp_host": body.smtp_host.strip(),
+        "smtp_port": int(body.smtp_port or 587),
+        "smtp_user": body.smtp_user.strip(),
+        "from_email": from_email,
+        "default_to": body.default_to.strip(),
+        "use_tls": bool(body.use_tls),
+    }
+    row.updated_at = datetime.now(timezone.utc)
+    session.add(row)
+    session.commit()
+    return _read_email_status(session, user)
+
+
+@router.delete("/email")
+def delete_email_integration(
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
+    row = session.get(IntegrationSetting, _integ_key(user, "email"))
+    if row:
+        session.delete(row)
+        session.commit()
+    return {"ok": True}
+
+
+@router.post("/email/send-run/{run_id}")
+async def send_run_to_email(
+    run_id: str,
+    to_email: str = Query("", description="Optional override recipient email"),
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
+    run = session.get(Run, run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+    check_owner(run.owner_id, user)
+
+    cfg = resolve_email_runtime_config(owner_id=user.id if user else None)
+    target = (to_email or cfg.get("default_to") or "").strip()
+    findings = load_run_findings(run)
+    ai_rep = run.ai_report_json or {}
+    payload_report = {
+        "findings": findings,
+        "summary": ai_rep.get("summary"),
+        "items": ai_rep.get("items") or [],
+        "validation": ai_rep.get("validation") or {},
+    }
+    _, _, body = extract_email_report_summary({"report": payload_report})
+    try:
+        res = await send_email_message(
+            cfg=cfg,
+            to_addr=target,
+            subject=f"FloraByte Security Report · Run {run.id[:8]}",
+            body=body,
+        )
+        return res
+    except Exception as exc:
+        raise HTTPException(502, redact_text(str(exc), [cfg.get("secret", "")])) from exc

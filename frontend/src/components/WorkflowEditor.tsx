@@ -58,6 +58,19 @@ const DEFAULT_INTEGRATIONS: IntegrationsDto = {
     bot_username: '',
     verified: false,
   },
+  email: {
+    configured: false,
+    enabled: false,
+    source: 'none',
+    transport: 'resend',
+    smtp_host: '',
+    smtp_port: 587,
+    smtp_user: '',
+    from_email: '',
+    default_to: '',
+    use_tls: true,
+    secret_preview: '',
+  },
 };
 
 const STORAGE_KEY = 'florabyte-workflow';
@@ -711,10 +724,21 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
       (n) =>
         n.data.kind === 'notify.email' &&
         !n.data.params?.dry_run &&
-        !String(n.data.params?.to_email ?? '').trim(),
+        !integrations.email?.configured &&
+        !String(n.data.params?.credential_id ?? '').trim(),
     );
     if (unconfiguredEmail) {
-      return 'У блока Email не указан адрес получателя (to_email). Укажите email в параметрах блока или включите dry_run.';
+      return 'Блок Email не настроен: откройте «Интеграции → Email-уведомления» (Resend API или SMTP) и сохраните настройки отправки.';
+    }
+    const missingToEmail = nodes.find(
+      (n) =>
+        n.data.kind === 'notify.email' &&
+        !n.data.params?.dry_run &&
+        !String(n.data.params?.to_email ?? '').trim() &&
+        !String(integrations.email?.default_to ?? '').trim(),
+    );
+    if (missingToEmail) {
+      return 'У блока Email не указан адрес получателя (to_email). Укажите email в параметрах блока или в «Интеграции → Email».';
     }
     // Mirror the backend validation so invalid graphs are rejected before saving.
     for (const edge of edges) {
@@ -1124,6 +1148,15 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
             setStatusMsg(`Отчёт отправлен в Telegram (chat_id=${res.chat_id}).`);
           } catch (err) {
             setStatusMsg(`Ошибка отправки в Telegram: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }}
+        emailConfigured={Boolean(integrations.email?.configured)}
+        onSendEmail={async (runId) => {
+          try {
+            const res = await api.sendRunToEmail(runId);
+            setStatusMsg(`Отчёт отправлен на почту ${res.to_email}.`);
+          } catch (err) {
+            setStatusMsg(`Ошибка отправки на почту: ${err instanceof Error ? err.message : String(err)}`);
           }
         }}
       />

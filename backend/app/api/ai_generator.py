@@ -17,6 +17,7 @@ from app.core.models import User
 from app.engine.graph import GraphError, validate_graph
 from app.nodes.ai.providers import provider_manager
 from app.nodes.custom_manager import build_effective_registry
+from app.nodes.notify.email import resolve_email_runtime_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -153,7 +154,7 @@ def _normalize_and_validate_graph(
     return candidate
 
 
-def _deterministic_workflow_from_prompt(prompt: str) -> tuple[str, str, dict[str, Any]]:
+def _deterministic_workflow_from_prompt(prompt: str, default_email: str = "") -> tuple[str, str, dict[str, Any]]:
     text = prompt.strip()
     lower = text.lower()
 
@@ -327,7 +328,7 @@ def _deterministic_workflow_from_prompt(prompt: str) -> tuple[str, str, dict[str
     channels_used: list[str] = []
 
     if want_email:
-        to_email = emails[0] if emails else ""
+        to_email = emails[0] if emails else default_email
         nodes.append(
             {
                 "id": "em1",
@@ -335,7 +336,7 @@ def _deterministic_workflow_from_prompt(prompt: str) -> tuple[str, str, dict[str
                 "params": {
                     "to_email": to_email,
                     "subject": "FloraByte Security Report",
-                    "dry_run": not bool(to_email),
+                    "dry_run": False,
                 },
                 "position": {"x": next_x, "y": notify_y},
             }
@@ -469,8 +470,10 @@ async def generate_workflow(
     """Generate a validated, pre-configured workflow graph from a natural-language prompt."""
     owner_id = user.id if user else None
     registry = build_effective_registry(session, owner_id=owner_id)
+    email_cfg = resolve_email_runtime_config(owner_id=owner_id)
+    default_email = str(email_cfg.get("default_to") or (user.email if user else "") or "").strip()
 
-    fb_name, fb_summary, fb_graph = _deterministic_workflow_from_prompt(req.prompt)
+    fb_name, fb_summary, fb_graph = _deterministic_workflow_from_prompt(req.prompt, default_email=default_email)
     provider, llm_name, llm_summary, llm_graph = await _try_llm_generate(
         req.prompt,
         registry=registry,

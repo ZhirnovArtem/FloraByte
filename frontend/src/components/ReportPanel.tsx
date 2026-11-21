@@ -14,6 +14,8 @@ type ReportPanelProps = {
   onRefreshHistory?: () => void;
   telegramConfigured?: boolean;
   onSendTelegram?: (runId: string) => Promise<void>;
+  emailConfigured?: boolean;
+  onSendEmail?: (runId: string) => Promise<void>;
 };
 
 const SEV_COLORS: Record<string, { bg: string; fg: string; bar: string }> = {
@@ -35,6 +37,8 @@ export default function ReportPanel({
   onRefreshHistory,
   telegramConfigured,
   onSendTelegram,
+  emailConfigured,
+  onSendEmail,
 }: ReportPanelProps) {
   const [tab, setTab] = useState<'findings' | 'dashboard' | 'ai' | 'markdown' | 'log' | 'history'>('findings');
   const [catFilter, setCatFilter] = useState<string>('ALL');
@@ -44,6 +48,7 @@ export default function ReportPanel({
   const [compareResult, setCompareResult] = useState<RunCompareDto | null>(null);
   const [compareErr, setCompareErr] = useState<string>('');
   const [sendingTg, setSendingTg] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
 
   const ai: AiReportDto | null = run?.ai_report ?? null;
   const filtered = catFilter === 'ALL' ? findings : findings.filter((f) => f.category === catFilter);
@@ -234,6 +239,29 @@ export default function ReportPanel({
                     }}
                   >
                     {sendingTg ? 'Отправка…' : 'Отправить в Telegram'}
+                  </button>
+                )}
+                {emailConfigured && onSendEmail && (
+                  <button
+                    type="button"
+                    disabled={sendingEmail}
+                    onClick={() => {
+                      setSendingEmail(true);
+                      void onSendEmail(run.id).finally(() => setSendingEmail(false));
+                    }}
+                    style={{
+                      marginLeft: 6,
+                      padding: '3px 9px',
+                      borderRadius: 6,
+                      border: '1px solid #059669',
+                      background: '#dcfce7',
+                      color: '#166534',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      cursor: sendingEmail ? 'wait' : 'pointer',
+                    }}
+                  >
+                    {sendingEmail ? 'Отправка…' : 'Отправить на Email'}
                   </button>
                 )}
               </>
