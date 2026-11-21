@@ -10,24 +10,63 @@ class GraphError(ValueError):
     pass
 
 
-def _port_kind(node_type: str, port_name: str, direction: str, registry: dict) -> str | None:
+_COMPATIBLE_PORTS = {
+    ("Workspace", "Workspace"),
+    ("Findings", "Findings"),
+    ("Report", "Report"),
+    ("Any", "Any"),
+    ("Boolean", "Boolean"),
+    ("Workspace", "Any"),
+    ("Findings", "Any"),
+    ("Report", "Any"),
+    ("Boolean", "Any"),
+    ("Any", "Workspace"),
+    ("Any", "Findings"),
+    ("Any", "Report"),
+    ("Any", "Boolean"),
+}
+
+
+def _resolve_port(
+    node_id: str,
+    node_type: str,
+    handle: str | None,
+    direction: str,
+    registry: dict,
+) -> tuple[str, str]:
+    """Return (resolved_port_name, port_kind) or raise GraphError if invalid."""
     cls = registry.get(node_type)
     if not cls:
-        return None
+        raise GraphError(f"Unknown node type: {node_type} (node {node_id})")
+
     ports = cls.inputs if direction == "in" else cls.outputs
-    for p in ports:
-        if p.name == port_name:
-            return p.kind
-    # default single port names
-    if direction == "in" and port_name in ("in", "workspace", "findings", "report", ""):
-        return "Any"
-    if direction == "out" and port_name in ("out", "workspace", "findings", "report", "true", "false"):
-        return "Any"
-    return None
+    if not ports:
+        side = "input" if direction == "in" else "output"
+        raise GraphError(f"Node {node_id} ({node_type}) does not accept {side} connections")
+
+    if handle:
+        for p in ports:
+            if p.name == handle:
+                return p.name, p.kind
+        available = ", ".join(p.name for p in ports)
+        side = "input" if direction == "in" else "output"
+        raise GraphError(
+            f"Unknown {side} port {handle!r} on node {node_id} ({node_type}); available: {available}"
+        )
+
+    # Handle omitted: for multi-branch outputs (e.g. true/false, match/no_match), require explicit handle
+    if direction == "out" and len(ports) > 1:
+        available = ", ".join(p.name for p in ports)
+        raise GraphError(
+            f"Node {node_id} ({node_type}) has multiple output ports ({available}); edge must specify sourceHandle"
+        )
+
+    default_port = ports[0]
+    return default_port.name, default_port.kind
 
 
 def validate_graph(graph: dict[str, Any], registry: dict) -> None:
-    """Validate workflow graph: nodes exist, no cycles, one trigger per component, port compatibility."""
+    """Validate workflow graph: nodes exist, no cycles, trigger present, ports & handles valid."""
     nodes = {n["id"]: n for n in graph.get("nodes", [])}
     edges = graph.get("edges", [])
 
@@ -46,16 +85,16 @@ def validate_graph(graph: dict[str, Any], registry: dict) -> None:
         src, tgt = e.get("source"), e.get("target")
         if src not in nodes or tgt not in nodes:
             raise GraphError(f"Edge references missing node: {e.get('id')}")
+        if src == tgt:
+            raise GraphError(f"Self-loop on node {src}")
         out_edges[src].append(e)
         in_degree[tgt] = in_degree.get(tgt, 0) + 1
 
     # Cycle detection via Kahn
     q = deque([nid for nid, d in in_degree.items() if d == 0])
     visited = 0
-    order: list[str] = []
     while q:
         u = q.popleft()
-        order.append(u)
         visited += 1
         for e in out_edges[u]:
             v = e["target"]
@@ -65,42 +104,33 @@ def validate_graph(graph: dict[str, Any], registry: dict) -> None:
     if visited != len(nodes):
         raise GraphError("Workflow graph contains a cycle")
 
-    # Exactly one trigger in the connected component (simplified: at least one trigger, warn on many)
+    # At least one trigger node
     triggers = [n for n in nodes.values() if str(n.get("type", "")).startswith("trigger.")]
     if len(triggers) == 0:
         raise GraphError("Workflow must have at least one trigger node")
-    if len(triggers) > 1:
-        # allow for now, but document; strict mode could reject
-        pass
 
-    # Port kind compatibility (soft: only error on known incompatible pairs)
-    compatible = {
-        ("Workspace", "Workspace"),
-        ("Findings", "Findings"),
-        ("Report", "Report"),
-        ("Any", "Any"),
-        ("Boolean", "Boolean"),
-        ("Workspace", "Any"),
-        ("Findings", "Any"),
-        ("Report", "Any"),
-        ("Boolean", "Any"),
-        ("Any", "Workspace"),
-        ("Any", "Findings"),
-        ("Any", "Report"),
-        ("Any", "Boolean"),
-    }
+    # Port existence, compatibility, and single-target-handle collision check
+    used_target_ports: set[tuple[str, str]] = set()
     for e in edges:
         src_node = nodes[e["source"]]
         tgt_node = nodes[e["target"]]
-        src_handle = e.get("sourceHandle") or "out"
-        tgt_handle = e.get("targetHandle") or "in"
-        sk = _port_kind(src_node["type"], src_handle, "out", registry) or "Any"
-        tk = _port_kind(tgt_node["type"], tgt_handle, "in", registry) or "Any"
-        if (sk, tk) not in compatible and sk != "Any" and tk != "Any":
+        src_port, sk = _resolve_port(
+            e["source"], src_node["type"], e.get("sourceHandle"), "out", registry
+        )
+        tgt_port, tk = _resolve_port(
+            e["target"], tgt_node["type"], e.get("targetHandle"), "in", registry
+        )
+        if (sk, tk) not in _COMPATIBLE_PORTS:
             raise GraphError(
                 f"Incompatible ports on edge {e.get('id')}: {sk} → {tk} "
-                f"({src_node['type']}.{src_handle} → {tgt_node['type']}.{tgt_handle})"
+                f"({src_node['type']}.{src_port} → {tgt_node['type']}.{tgt_port})"
             )
+        target_slot = (e["target"], tgt_port)
+        if target_slot in used_target_ports:
+            raise GraphError(
+                f"Multiple edges target the same input port {tgt_port!r} on node {e['target']}"
+            )
+        used_target_ports.add(target_slot)
 
 
 def topological_order(graph: dict[str, Any]) -> list[str]:

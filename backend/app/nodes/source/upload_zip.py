@@ -79,7 +79,7 @@ class UploadZipNode(BaseNode):
     type = "source.upload_zip"
     label = "Upload ZIP"
     group = "source"
-    inputs = []
+    inputs = [Port(name="in", kind="Any")]
     outputs = [Port(name="workspace", kind="Workspace")]
     Params = Params
 

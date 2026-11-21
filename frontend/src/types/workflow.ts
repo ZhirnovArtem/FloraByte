@@ -111,6 +111,7 @@ export type AiReportDto = {
     dropped_items?: number;
     dropped_cve?: number;
     mode?: string;
+    fallback_reason?: string | null;
     errors?: string[];
   };
 };

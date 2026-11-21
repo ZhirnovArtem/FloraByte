@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     # Crypto
     app_secret_key: str = Field(default="", validation_alias="APP_SECRET_KEY")
 
+    # CORS (comma-separated origins)
+    cors_allow_origins: str = Field(
+        default="http://localhost:5173,http://127.0.0.1:5173",
+        validation_alias="CORS_ALLOW_ORIGINS",
+    )
+
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
+
     # Telegram (prefer credentials store; env for quick demo only)
     telegram_bot_token: str = Field(default="", validation_alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", validation_alias="TELEGRAM_CHAT_ID")

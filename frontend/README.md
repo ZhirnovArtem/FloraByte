@@ -1,75 +1,36 @@
-# React + TypeScript + Vite
+# FloraByte — Frontend (React + React Flow)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Визуальный конструктор security-сценариев (workflow) для платформы **AI Security Workflow**.
 
-Currently, two official plugins are available:
+## Возможности
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Каталог нод из Backend (`GET /api/node-types`):** палитра в левой панели строится динамически, при недоступности сервера используется локальный fallback-каталог.
+- **Готовые шаблоны (`GET /api/templates`, `POST /api/templates/{id}/copy`):** быстрая загрузка преднастроенных графов (например, `Full Security Scan`).
+- **Редактор графа (React Flow):** добавление/удаление нод, соединение типизированных портов (`Workspace`, `Findings`, `Report`, ветки `true`/`false`), предзапусковая проверка графа.
+- **Динамические настройки нод:** форма параметров генерируется по `params_schema`, поддерживает загрузку `.zip` (`POST /api/uploads`) и управление Fernet-секретами (`GET/POST /api/credentials`).
+- **Сохранение и загрузка (`GET/POST/PUT /api/workflows`):** сохранение на сервере с автоматическим резервным копированием в `localStorage`.
+- **Выполнение и мониторинг в реальном времени (`POST /api/workflows/{id}/run`, `WS /ws/runs/{run_id}`):** отображение статусов нод (`pending → running → success | failed | skipped`), восстановление отслеживания через `GET /api/runs/{id}` при обрыве WebSocket или перезагрузке страницы.
+- **Панель находок и отчётов:** таблица находок с фильтрами, вкладка AI-отчёта с явным индикатором режима (`LLM (Gemini)` / `Fallback (без LLM)` / `Нет находок`), Markdown-предпросмотр и скачивание `report.json` / `report.md`.
 
-## React Compiler
+## Структура `src/`
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- `src/api/client.ts` — HTTP и WebSocket клиент к FastAPI backend
+- `src/types/workflow.ts` — TypeScript-типы графа, нод, запусков, находок и AI-отчёта
+- `src/config/nodeCatalog.ts` — запасной локальный каталог нод (при офлайн-режиме)
+- `src/components/WorkflowEditor.tsx` — основной редактор, тулбар, загрузка ZIP, запуск и отслеживание статусов
+- `src/components/NodeSidebar.tsx` — левая панель блоков и шаблонов
+- `src/components/NodeSettings.tsx` — правая панель параметров выбранной ноды
+- `src/components/SecurityNode.tsx` — кастомная нода React Flow с портами и бейджами статуса
+- `src/components/ReportPanel.tsx` — нижняя панель находок, AI-анализа, Markdown и WS-лога
 
-## Expanding the ESLint configuration
+## Локальный запуск и сборка
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+cd frontend
+npm install
+npm run dev       # http://localhost:5173 (проксирует /api, /ws, /health на http://127.0.0.1:8000)
+npm run build     # проверка TypeScript (tsc -b) и production-сборка Vite
+npm run lint      # ESLint
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
-```
+Переменная окружения `VITE_BACKEND_URL` позволяет переопределить адрес backend для Vite proxy (по умолчанию `http://127.0.0.1:8000`).

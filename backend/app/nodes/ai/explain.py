@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import httpx
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
@@ -105,45 +106,69 @@ def _to_canonical_security_findings(findings: list[dict]) -> list[dict]:
     return canonical
 
 
-async def _call_ai_code_checker(findings: list[dict], api_key: str, model: str | None) -> dict[str, Any]:
-    from services.ai_service import analyze_findings  # type: ignore[import-not-found]
+async def _run_checker_batch_without_env_mutation(
+    batch: list[dict], api_key: str, model: str | None
+) -> dict[str, Any]:
+    """Execute AI_CODE_CHECKER pipeline with explicit api_key & model (no os.environ mutation)."""
+    import services.ai_service as ai_svc  # type: ignore[import-not-found]
 
+    # Respect monkeypatched analyze_findings in tests
+    if getattr(ai_svc.analyze_findings, "__module__", "") != "services.ai_service":
+        return await ai_svc.analyze_findings(batch)
+
+    parsed_findings = ai_svc._parse_findings(batch)
+    configured_model = (model or ai_svc.DEFAULT_MODEL).strip() or ai_svc.DEFAULT_MODEL
+    async with httpx.AsyncClient(timeout=ai_svc.TIMEOUT_SECONDS) as client:
+        available = await ai_svc._list_generation_models(client, api_key)
+        queue = ai_svc._candidate_models(available, configured_model)
+        last_error: ai_svc.AIServiceError | None = None
+        attempts = 0
+        while queue and attempts < ai_svc.MAX_MODEL_ATTEMPTS:
+            mdl = queue.pop(0)
+            attempts += 1
+            try:
+                payload = await ai_svc._generate_with_retry(client, api_key, mdl, parsed_findings)
+            except ai_svc._SwitchModel as exc:
+                last_error = exc.error
+                if exc.permanent:
+                    ai_svc._unavailable_models.add(mdl)
+                ai_svc._promote_recommended(queue, exc.recommended, available)
+                continue
+            ai_svc._remember_model(mdl)
+            return ai_svc._build_report(payload, parsed_findings)
+
+    if last_error is not None:
+        raise ai_svc.AIServiceError(
+            "Не удалось получить анализ ни от одной доступной модели Gemini "
+            f"с поддержкой generateContent. Последняя ошибка: {last_error}",
+            status_code=last_error.status_code,
+            detail=last_error.detail,
+        )
+    raise ai_svc.AIServiceError("Gemini API не вернул моделей с поддержкой generateContent.")
+
+
+async def _call_ai_code_checker(findings: list[dict], api_key: str, model: str | None) -> dict[str, Any]:
     canonical = _to_canonical_security_findings(findings)
-    prev_key = os.environ.get("GEMINI_API_KEY")
-    prev_model = os.environ.get("GEMINI_MODEL")
-    os.environ["GEMINI_API_KEY"] = api_key
-    if model:
-        os.environ["GEMINI_MODEL"] = model
-    try:
-        all_items: list[dict] = []
-        summaries: list[str] = []
-        for offset in range(0, len(canonical), MAX_BATCH_SIZE):
-            batch = canonical[offset : offset + MAX_BATCH_SIZE]
-            report = await analyze_findings(batch)
-            if report.get("summary"):
-                summaries.append(str(report["summary"]))
-            for idx_in_batch, entry in enumerate(report.get("findings") or []):
-                all_items.append(
-                    {
-                        "finding_ref": offset + idx_in_batch,
-                        "explanation": str(entry.get("explanation") or ""),
-                        "risk": str(entry.get("risk") or ""),
-                        "fix_steps": [str(entry["recommendation"])] if entry.get("recommendation") else [],
-                    }
-                )
-        return {
-            "summary": " ".join(summaries).strip() or f"Проанализировано находок: {len(findings)}.",
-            "items": all_items,
-        }
-    finally:
-        if prev_key is None:
-            os.environ.pop("GEMINI_API_KEY", None)
-        else:
-            os.environ["GEMINI_API_KEY"] = prev_key
-        if prev_model is None:
-            os.environ.pop("GEMINI_MODEL", None)
-        else:
-            os.environ["GEMINI_MODEL"] = prev_model
+    all_items: list[dict] = []
+    summaries: list[str] = []
+    for offset in range(0, len(canonical), MAX_BATCH_SIZE):
+        batch = canonical[offset : offset + MAX_BATCH_SIZE]
+        report = await _run_checker_batch_without_env_mutation(batch, api_key, model)
+        if report.get("summary"):
+            summaries.append(str(report["summary"]))
+        for idx_in_batch, entry in enumerate(report.get("findings") or []):
+            all_items.append(
+                {
+                    "finding_ref": offset + idx_in_batch,
+                    "explanation": str(entry.get("explanation") or ""),
+                    "risk": str(entry.get("risk") or ""),
+                    "fix_steps": [str(entry["recommendation"])] if entry.get("recommendation") else [],
+                }
+            )
+    return {
+        "summary": " ".join(summaries).strip() or f"Проанализировано находок: {len(findings)}.",
+        "items": all_items,
+    }
 
 
 @register_node
@@ -174,14 +199,14 @@ class AiExplainNode(BaseNode):
                 "report": {
                     "summary": fb.summary,
                     "items": [],
-                    "validation": {**validation, "passed": True, "mode": "empty"},
+                    "validation": {**validation, "passed": True, "mode": "empty", "fallback_reason": None},
                     "findings": [],
                 }
             }
 
         key, model = _resolve_gemini_config(params)
-
         parsed = None
+        fallback_reason: str | None = None
         try:
             if not key:
                 raise RuntimeError("GEMINI_API_KEY / LLM API key not configured")
@@ -193,17 +218,21 @@ class AiExplainNode(BaseNode):
                 parsed, validation2 = validate_llm_response(json.dumps(raw_obj2, ensure_ascii=False), findings)
                 validation = {**validation2, "retried": True}
         except Exception as e:
-            logger.warning("AI_CODE_CHECKER explain failed: %s — using fallback", e)
+            safe_err = redact_text(str(e), [key] if key else None)
+            logger.warning("AI_CODE_CHECKER explain failed: %s — using fallback", safe_err)
             validation["errors"] = validation.get("errors") or []
-            validation["errors"].append(str(e))
+            validation["errors"].append(safe_err)
+            fallback_reason = safe_err
             parsed = None
 
         if parsed is None or not parsed.items:
             parsed = fallback_report(findings)
             validation["passed"] = False
             validation["mode"] = "fallback"
+            validation["fallback_reason"] = fallback_reason or "LLM response failed validation or returned no items"
         else:
             validation["mode"] = "llm"
+            validation["fallback_reason"] = None
 
         return {
             "report": {

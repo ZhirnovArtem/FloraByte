@@ -41,7 +41,45 @@ async def test_ai_explain_fallback_when_no_key(tmp_path, monkeypatch):
     out = await node.run(ctx, {"findings": [finding]}, Params())
     rep = out["report"]
     assert rep["validation"]["mode"] == "fallback"
+    assert rep["validation"]["fallback_reason"]
     assert len(rep["items"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_ai_explain_does_not_mutate_os_environ(tmp_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+
+    from app.nodes.ai.explain import _run_checker_batch_without_env_mutation
+
+    # Verify calling internal runner with explicit key leaves os.environ clean
+    with patch("services.ai_service._list_generation_models", new=AsyncMock(return_value={"gemini-2.0-flash"})), patch(
+        "services.ai_service._generate_with_retry",
+        new=AsyncMock(
+            return_value={
+                "candidates": [
+                    {
+                        "finishReason": "STOP",
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": '{"status":"ok","summary":"ok","findings":[{"rule_id":"r","file":"a.kt","line":1,"severity":"HIGH","explanation":"exp","risk":"risk","recommendation":"fix"}]}'
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        ),
+    ):
+        res = await _run_checker_batch_without_env_mutation(
+            [{"rule_id": "r", "file": "a.kt", "line": 1, "severity": "HIGH", "message": "msg"}],
+            api_key="explicit-key-123",
+            model="gemini-2.0-flash",
+        )
+    assert res["status"] == "ok"
+    assert "GEMINI_API_KEY" not in os.environ
+    assert "GEMINI_MODEL" not in os.environ
 
 
 @pytest.mark.asyncio

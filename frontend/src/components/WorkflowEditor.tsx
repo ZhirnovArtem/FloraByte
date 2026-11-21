@@ -33,6 +33,8 @@ import type {
 } from '../types/workflow';
 
 const STORAGE_KEY = 'florabyte-workflow';
+const ACTIVE_RUN_KEY = 'florabyte-active-run-id';
+const TERMINAL_RUN_STATUSES = new Set(['success', 'failed', 'partial']);
 
 const nodeTypes = {
   security: SecurityNode,
@@ -147,10 +149,122 @@ function WorkflowEditorContent() {
   const [panelOpen, setPanelOpen] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const pollTimerRef = useRef<number | null>(null);
   const { deleteElements } = useReactFlow();
+
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current !== null) {
+      window.clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, []);
 
   const specByType = useMemo(() => new Map(catalog.map((c) => [c.type, c])), [catalog]);
   const selectedNode = nodes.find((node) => node.selected) ?? null;
+
+  const syncRunState = useCallback(async (runId: string): Promise<RunDto | null> => {
+    try {
+      const runDetails = await api.getRun(runId);
+      setActiveRun(runDetails);
+      if (runDetails.nodes) {
+        const byId = new Map(runDetails.nodes.map((nr) => [nr.node_id, nr]));
+        setNodes((curr) =>
+          curr.map((n) => {
+            const nr = byId.get(n.id);
+            if (!nr) return n;
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                runStatus: nr.status,
+                outputPreview: nr.output_preview ?? null,
+                error: nr.error ?? null,
+              },
+            };
+          }),
+        );
+      }
+
+      if (TERMINAL_RUN_STATUSES.has(runDetails.status)) {
+        stopPolling();
+        sessionStorage.removeItem(ACTIVE_RUN_KEY);
+        setIsRunning(false);
+        setStatusMsg(`Выполнение завершено: ${runDetails.status}`);
+        const [repJson, repMd] = await Promise.all([
+          api.getReportJson(runId).catch(() => ({ findings: [] })),
+          api.getReportMd(runId).catch(() => ''),
+        ]);
+        setFindings(repJson.findings ?? runDetails.summary?.report?.findings ?? []);
+        setReportMd(repMd);
+        setPanelOpen(true);
+      }
+      return runDetails;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatusMsg(`Не удалось загрузить результаты запуска: ${msg}`);
+      return null;
+    }
+  }, [setNodes, stopPolling]);
+
+  const startPollingRun = useCallback((runId: string) => {
+    stopPolling();
+    pollTimerRef.current = window.setInterval(() => {
+      void syncRunState(runId);
+    }, 1500);
+  }, [stopPolling, syncRunState]);
+
+  const attachToRun = useCallback((runId: string) => {
+    wsRef.current?.close();
+    sessionStorage.setItem(ACTIVE_RUN_KEY, runId);
+    let finishedSeen = false;
+
+    const ws = api.subscribeRunEvents(
+      runId,
+      (ev) => {
+        setWsEvents((curr) => [...curr, ev]);
+        if (ev.node_id && ev.status) {
+          const st = ev.status as NodeRunStatus;
+          setNodes((curr) =>
+            curr.map((n) =>
+              n.id === ev.node_id
+                ? {
+                    ...n,
+                    data: {
+                      ...n.data,
+                      runStatus: st,
+                      durationMs: ev.duration_ms ?? n.data.durationMs,
+                      outputPreview: ev.output_preview ?? n.data.outputPreview,
+                      error: ev.error ?? null,
+                    },
+                  }
+                : n,
+            ),
+          );
+        }
+        if (ev.event === 'run_finished') {
+          finishedSeen = true;
+          stopPolling();
+          void syncRunState(runId);
+          ws.close();
+        }
+      },
+      () => {
+        if (!finishedSeen) {
+          // Verify actual run status on backend before concluding the run finished
+          void syncRunState(runId).then((details) => {
+            if (details && !TERMINAL_RUN_STATUSES.has(details.status)) {
+              setIsRunning(true);
+              setStatusMsg('WebSocket отключён — отслеживаем выполнение через polling…');
+              startPollingRun(runId);
+            } else if (!details) {
+              setIsRunning(false);
+            }
+          });
+        }
+      },
+    );
+    wsRef.current = ws;
+  }, [setNodes, startPollingRun, stopPolling, syncRunState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -175,6 +289,17 @@ function WorkflowEditorContent() {
         setTemplates(tpls);
         setWorkflows(wfs);
         setCredentials(creds);
+
+        // Restore active run if page was reloaded mid-execution
+        const savedRunId = sessionStorage.getItem(ACTIVE_RUN_KEY);
+        if (savedRunId) {
+          const runDetails = await syncRunState(savedRunId);
+          if (runDetails && !TERMINAL_RUN_STATUSES.has(runDetails.status)) {
+            setIsRunning(true);
+            setPanelOpen(true);
+            attachToRun(savedRunId);
+          }
+        }
       } catch {
         if (!cancelled) {
           setCatalogSource('fallback');
@@ -185,6 +310,7 @@ function WorkflowEditorContent() {
     return () => {
       cancelled = true;
       wsRef.current?.close();
+      stopPolling();
     };
   }, []);
 
@@ -388,43 +514,32 @@ function WorkflowEditorContent() {
     }
   };
 
-  const fetchRunArtifacts = async (runId: string) => {
-    try {
-      const [runDetails, repJson, repMd] = await Promise.all([
-        api.getRun(runId),
-        api.getReportJson(runId).catch(() => ({ findings: [] })),
-        api.getReportMd(runId).catch(() => ''),
-      ]);
-      setActiveRun(runDetails);
-      setFindings(repJson.findings ?? runDetails.summary?.report?.findings ?? []);
-      setReportMd(repMd);
-      if (runDetails.nodes) {
-        const byId = new Map(runDetails.nodes.map((nr) => [nr.node_id, nr]));
-        setNodes((curr) =>
-          curr.map((n) => {
-            const nr = byId.get(n.id);
-            if (!nr) return n;
-            return {
-              ...n,
-              data: {
-                ...n.data,
-                runStatus: nr.status,
-                outputPreview: nr.output_preview ?? null,
-                error: nr.error ?? null,
-              },
-            };
-          }),
-        );
-      }
-      setPanelOpen(true);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setStatusMsg(`Не удалось загрузить результаты запуска: ${msg}`);
+  const validateBeforeRun = (): string | null => {
+    if (nodes.length === 0) {
+      return 'Схема пуста — добавьте блоки перед запуском.';
     }
+    const hasTrigger = nodes.some((n) => n.data.kind.startsWith('trigger.'));
+    if (!hasTrigger) {
+      return 'Добавьте хотя бы один триггер (например, Manual Trigger).';
+    }
+    const missingZip = nodes.find(
+      (n) => n.data.kind === 'source.upload_zip' && !String(n.data.params?.upload_id ?? '').trim(),
+    );
+    if (missingZip) {
+      return `У блока "${missingZip.data.label}" не указан upload_id — загрузите .zip архив перед запуском.`;
+    }
+    return null;
   };
 
   const handleRun = async () => {
+    const validationErr = validateBeforeRun();
+    if (validationErr) {
+      setStatusMsg(validationErr);
+      return;
+    }
+
     wsRef.current?.close();
+    stopPolling();
     const saved = await saveWorkflow();
     if (!saved) {
       setStatusMsg('Запуск невозможен: не удалось сохранить workflow на backend.');
@@ -448,43 +563,7 @@ function WorkflowEditorContent() {
     try {
       const { run_id } = await api.runWorkflow(saved.id, false);
       setActiveRun({ id: run_id, workflow_id: saved.id, status: 'running', trigger: 'manual' });
-
-      const ws = api.subscribeRunEvents(
-        run_id,
-        (ev) => {
-          setWsEvents((curr) => [...curr, ev]);
-          if (ev.node_id && ev.status) {
-            const st = ev.status as NodeRunStatus;
-            setNodes((curr) =>
-              curr.map((n) =>
-                n.id === ev.node_id
-                  ? {
-                      ...n,
-                      data: {
-                        ...n.data,
-                        runStatus: st,
-                        durationMs: ev.duration_ms ?? n.data.durationMs,
-                        outputPreview: ev.output_preview ?? n.data.outputPreview,
-                        error: ev.error ?? null,
-                      },
-                    }
-                  : n,
-              ),
-            );
-          }
-          if (ev.event === 'run_finished') {
-            setIsRunning(false);
-            setStatusMsg(`Выполнение завершено: ${ev.status}`);
-            void fetchRunArtifacts(run_id);
-            ws.close();
-          }
-        },
-        () => {
-          setIsRunning(false);
-          void fetchRunArtifacts(run_id);
-        },
-      );
-      wsRef.current = ws;
+      attachToRun(run_id);
     } catch (err) {
       setIsRunning(false);
       const msg = err instanceof Error ? err.message : String(err);

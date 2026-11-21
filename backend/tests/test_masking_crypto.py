@@ -27,3 +27,23 @@ def test_redact_known_secret():
     secret = "super-secret-value-12345"
     msg = f"Sending token {secret} to upstream"
     assert secret not in redact_text(msg, [secret])
+
+
+def test_app_secret_key_validation(monkeypatch):
+    import pytest
+    from cryptography.fernet import Fernet
+    from app.core.crypto import reset_fernet_cache
+
+    monkeypatch.setenv("APP_SECRET_KEY", "too-short-invalid-key")
+    reset_fernet_cache()
+    with pytest.raises(ValueError, match="APP_SECRET_KEY"):
+        encrypt("hello")
+
+    valid_key = Fernet.generate_key().decode()
+    monkeypatch.setenv("APP_SECRET_KEY", valid_key)
+    reset_fernet_cache()
+    ct = encrypt("hello-persist")
+    # Simulate restart with same key
+    reset_fernet_cache()
+    assert decrypt(ct) == "hello-persist"
+    reset_fernet_cache()

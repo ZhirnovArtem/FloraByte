@@ -27,7 +27,7 @@ class GitCloneNode(BaseNode):
     type = "source.git_clone"
     label = "Git Clone"
     group = "source"
-    inputs = []
+    inputs = [Port(name="in", kind="Any")]
     outputs = [Port(name="workspace", kind="Workspace")]
     Params = Params
 

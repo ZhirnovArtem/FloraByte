@@ -210,7 +210,7 @@ export default function ReportPanel({
                 </div>
               ) : (
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
                     <strong>Резюме:</strong> <span>{ai.summary}</span>
                     {ai.validation && (
                       <span
@@ -218,16 +218,48 @@ export default function ReportPanel({
                           fontSize: 11,
                           padding: '2px 8px',
                           borderRadius: 999,
-                          background: ai.validation.mode === 'llm' ? '#dcfce7' : '#fef3c7',
-                          color: ai.validation.mode === 'llm' ? '#166534' : '#92400e',
+                          background:
+                            ai.validation.mode === 'llm'
+                              ? '#dcfce7'
+                              : ai.validation.mode === 'empty'
+                              ? '#e0f2fe'
+                              : '#fef3c7',
+                          color:
+                            ai.validation.mode === 'llm'
+                              ? '#166534'
+                              : ai.validation.mode === 'empty'
+                              ? '#075985'
+                              : '#92400e',
                           fontWeight: 700,
                         }}
                       >
-                        mode={ai.validation.mode} · passed={String(ai.validation.passed)} · dropped_cve=
-                        {ai.validation.dropped_cve ?? 0}
+                        {ai.validation.mode === 'llm'
+                          ? 'Режим: LLM (Gemini)'
+                          : ai.validation.mode === 'empty'
+                          ? 'Режим: Нет находок'
+                          : 'Режим: Fallback (без LLM)'}{' '}
+                        · passed={String(ai.validation.passed)} · dropped_cve={ai.validation.dropped_cve ?? 0}
                       </span>
                     )}
                   </div>
+                  {ai.validation?.mode === 'fallback' && (
+                    <div
+                      style={{
+                        padding: '8px 10px',
+                        marginBottom: 10,
+                        borderRadius: 6,
+                        background: '#fffbeb',
+                        border: '1px solid #fcd34d',
+                        color: '#92400e',
+                        fontSize: 12,
+                      }}
+                    >
+                      <strong>Внимание (резервный отчёт):</strong>{' '}
+                      {ai.validation.fallback_reason ||
+                        ai.validation.errors?.join('; ') ||
+                        'LLM недоступна или не прошла валидацию — показан шаблонный fallback-отчёт.'}
+                    </div>
+                  )}
                   {ai.items.map((item, i) => (
                     <div
                       key={i}

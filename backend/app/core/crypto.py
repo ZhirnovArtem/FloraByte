@@ -11,18 +11,17 @@ _KEY_FILE = Path(os.environ.get("APP_SECRET_KEY_FILE", "/tmp/ai_security_workflo
 
 
 def _load_or_create_key() -> bytes:
-    env_key = os.environ.get("APP_SECRET_KEY")
+    env_key = os.environ.get("APP_SECRET_KEY", "").strip()
     if env_key:
-        # Accept raw Fernet key or generate from string (pad/hash to 32 url-safe)
+        raw = env_key.encode("ascii", errors="strict")
         try:
-            return env_key.encode() if len(env_key) == 44 else Fernet.generate_key()  # fallback safe
-        except Exception:
-            pass
-        # If user provided a passphrase-like string, derive a key deterministically for demo
-        import base64
-        import hashlib
-        digest = hashlib.sha256(env_key.encode()).digest()
-        return base64.urlsafe_b64encode(digest)
+            Fernet(raw)
+        except Exception as e:
+            raise ValueError(
+                "APP_SECRET_KEY must be a valid 44-character URL-safe base64 Fernet key "
+                "(generate via `python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"`)"
+            ) from e
+        return raw
 
     if _KEY_FILE.exists():
         return _KEY_FILE.read_bytes().strip()
@@ -38,12 +37,21 @@ def _load_or_create_key() -> bytes:
 
 
 _fernet: Fernet | None = None
+_fernet_key: bytes | None = None
+
+
+def reset_fernet_cache() -> None:
+    global _fernet, _fernet_key
+    _fernet = None
+    _fernet_key = None
 
 
 def get_fernet() -> Fernet:
-    global _fernet
-    if _fernet is None:
-        _fernet = Fernet(_load_or_create_key())
+    global _fernet, _fernet_key
+    key = _load_or_create_key()
+    if _fernet is None or _fernet_key != key:
+        _fernet = Fernet(key)
+        _fernet_key = key
     return _fernet
 
 
