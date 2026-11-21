@@ -154,3 +154,24 @@ export type CredentialDto = {
   value_preview: string;
   created_at?: string | null;
 };
+
+export type GeneratedWorkflowDto = {
+  name: string;
+  mode: string;
+  graph: BackendGraph;
+};
+
+export type RunCompareDto = {
+  summary: {
+    base_total: number;
+    target_total: number;
+    new_count: number;
+    fixed_count: number;
+    persisting_count: number;
+    delta: number;
+  };
+  severity_delta: Record<string, number>;
+  new: Array<FindingDto & { fingerprint?: string }>;
+  fixed: Array<FindingDto & { fingerprint?: string }>;
+  persisting: Array<FindingDto & { fingerprint?: string }>;
+};

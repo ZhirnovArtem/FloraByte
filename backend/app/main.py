@@ -17,6 +17,7 @@ from app.api.ws import router as ws_router
 from app.api.credentials import router as credentials_router
 from app.api.templates import router as templates_router
 from app.api.ci import router as ci_router
+from app.api.ai_generator import router as ai_generator_router
 from app.config import get_settings
 from app.core.db import init_db, get_engine
 from app.core.logging import setup_logging
@@ -75,6 +76,7 @@ app.include_router(ws_router)
 app.include_router(credentials_router)
 app.include_router(templates_router)
 app.include_router(ci_router)
+app.include_router(ai_generator_router)
 
 
 

@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { downloadRunReport } from '../api/client';
-import type { AiReportDto, FindingDto, RunDto, WsRunEvent } from '../types/workflow';
+import { compareRuns, downloadRunReport } from '../api/client';
+import type { AiReportDto, FindingDto, RunCompareDto, RunDto, WsRunEvent } from '../types/workflow';
 
 type ReportPanelProps = {
   run: RunDto | null;
@@ -14,11 +14,11 @@ type ReportPanelProps = {
   onRefreshHistory?: () => void;
 };
 
-const SEV_COLORS: Record<string, { bg: string; fg: string }> = {
-  CRITICAL: { bg: '#fee2e2', fg: '#991b1b' },
-  HIGH: { bg: '#ffedd5', fg: '#9a3412' },
-  MEDIUM: { bg: '#fef3c7', fg: '#92400e' },
-  LOW: { bg: '#e0f2fe', fg: '#075985' },
+const SEV_COLORS: Record<string, { bg: string; fg: string; bar: string }> = {
+  CRITICAL: { bg: '#fee2e2', fg: '#991b1b', bar: '#dc2626' },
+  HIGH: { bg: '#ffedd5', fg: '#9a3412', bar: '#ea580c' },
+  MEDIUM: { bg: '#fef3c7', fg: '#92400e', bar: '#d97706' },
+  LOW: { bg: '#e0f2fe', fg: '#075985', bar: '#0284c7' },
 };
 
 export default function ReportPanel({
@@ -32,12 +32,41 @@ export default function ReportPanel({
   onSelectRun,
   onRefreshHistory,
 }: ReportPanelProps) {
-  const [tab, setTab] = useState<'findings' | 'ai' | 'markdown' | 'log' | 'history'>('findings');
+  const [tab, setTab] = useState<'findings' | 'dashboard' | 'ai' | 'markdown' | 'log' | 'history'>('findings');
   const [catFilter, setCatFilter] = useState<string>('ALL');
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  const [baseRunId, setBaseRunId] = useState<string>('');
+  const [targetRunId, setTargetRunId] = useState<string>('');
+  const [compareResult, setCompareResult] = useState<RunCompareDto | null>(null);
+  const [compareErr, setCompareErr] = useState<string>('');
 
   const ai: AiReportDto | null = run?.ai_report ?? null;
   const filtered = catFilter === 'ALL' ? findings : findings.filter((f) => f.category === catFilter);
+
+  const sevCounts: Record<string, number> = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+  const catCounts: Record<string, number> = { SECRET: 0, SCA: 0, SAST: 0 };
+  for (const f of findings) {
+    const s = (f.severity ?? 'LOW').toUpperCase();
+    sevCounts[s] = (sevCounts[s] ?? 0) + 1;
+    catCounts[f.category] = (catCounts[f.category] ?? 0) + 1;
+  }
+  const maxSev = Math.max(1, ...Object.values(sevCounts));
+
+  const handleCompare = async () => {
+    const base = baseRunId || runsHistory[1]?.id || '';
+    const target = targetRunId || run?.id || runsHistory[0]?.id || '';
+    if (!base || !target) {
+      setCompareErr('Нужно минимум два запуска для сравнения.');
+      return;
+    }
+    setCompareErr('');
+    try {
+      const res = await compareRuns(base, target);
+      setCompareResult(res);
+    } catch (err) {
+      setCompareErr(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   return (
     <div
@@ -87,13 +116,13 @@ export default function ReportPanel({
         </div>
 
         {isOpen && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {(['findings', 'ai', 'markdown', 'log', 'history'] as const).map((t) => (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            {(['findings', 'dashboard', 'ai', 'markdown', 'log', 'history'] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => {
                   setTab(t);
-                  if (t === 'history' && onRefreshHistory) onRefreshHistory();
+                  if ((t === 'history' || t === 'dashboard') && onRefreshHistory) onRefreshHistory();
                 }}
                 style={{
                   padding: '4px 10px',
@@ -107,6 +136,7 @@ export default function ReportPanel({
                 }}
               >
                 {t === 'findings' && `Находки (${findings.length})`}
+                {t === 'dashboard' && 'Дашборд и сравнение'}
                 {t === 'ai' && `AI-отчёт${ai ? ` (${ai.items.length})` : ''}`}
                 {t === 'markdown' && 'Markdown'}
                 {t === 'log' && `WS лог (${events.length})`}
@@ -135,6 +165,16 @@ export default function ReportPanel({
                   style={{ fontSize: 12, color: '#2563eb', marginLeft: 4, textDecoration: 'none', fontWeight: 600 }}
                 >
                   ↓ report.md
+                </a>
+                <a
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void downloadRunReport(run.id, 'pdf').catch((error: Error) => alert(error.message));
+                  }}
+                  style={{ fontSize: 12, color: '#dc2626', marginLeft: 4, textDecoration: 'none', fontWeight: 700 }}
+                >
+                  ↓ report.pdf
                 </a>
               </>
             )}
@@ -188,7 +228,7 @@ export default function ReportPanel({
                   </thead>
                   <tbody>
                     {filtered.map((f, idx) => {
-                      const sev = SEV_COLORS[f.severity ?? ''] ?? { bg: '#f1f5f9', fg: '#334155' };
+                      const sev = SEV_COLORS[f.severity ?? ''] ?? { bg: '#f1f5f9', fg: '#334155', bar: '#64748b' };
                       const detail =
                         f.category === 'SCA'
                           ? `${f.group}:${f.artifact}@${f.version} (${f.advisoryId})`
@@ -239,6 +279,99 @@ export default function ReportPanel({
                   </tbody>
                 </table>
               )}
+            </div>
+          )}
+
+          {tab === 'dashboard' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <div style={{ padding: 12, border: '1px solid #e2e8f0', borderRadius: 8, background: '#f8fafc' }}>
+                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Распределение по Severity</div>
+                {(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const).map((lvl) => {
+                  const count = sevCounts[lvl] ?? 0;
+                  const pct = Math.round((count / maxSev) * 100);
+                  const c = SEV_COLORS[lvl];
+                  return (
+                    <div key={lvl} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, fontSize: 12 }}>
+                      <span style={{ width: 70, fontWeight: 700, color: c.fg }}>{lvl}</span>
+                      <div style={{ flex: 1, height: 12, background: '#e2e8f0', borderRadius: 6, overflow: 'hidden' }}>
+                        <div style={{ width: `${pct}%`, height: '100%', background: c.bar }} />
+                      </div>
+                      <span style={{ width: 28, textAlign: 'right', fontWeight: 700 }}>{count}</span>
+                    </div>
+                  );
+                })}
+                <div style={{ marginTop: 10, fontSize: 12, color: '#475569' }}>
+                  По категориям: SECRET <strong>{catCounts.SECRET}</strong> · SCA <strong>{catCounts.SCA}</strong> · SAST{' '}
+                  <strong>{catCounts.SAST}</strong>
+                </div>
+              </div>
+
+              <div style={{ padding: 12, border: '1px solid #e2e8f0', borderRadius: 8, background: '#f8fafc' }}>
+                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Сравнение запусков (Diff)</div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                  <select
+                    value={baseRunId || runsHistory[1]?.id || ''}
+                    onChange={(e) => setBaseRunId(e.target.value)}
+                    style={{ padding: '4px 6px', fontSize: 12, borderRadius: 6, border: '1px solid #cbd5e1' }}
+                  >
+                    <option value="">Базовый run…</option>
+                    {runsHistory.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.id.slice(0, 8)} ({r.status})
+                      </option>
+                    ))}
+                  </select>
+                  <span style={{ fontSize: 12 }}>→</span>
+                  <select
+                    value={targetRunId || run?.id || runsHistory[0]?.id || ''}
+                    onChange={(e) => setTargetRunId(e.target.value)}
+                    style={{ padding: '4px 6px', fontSize: 12, borderRadius: 6, border: '1px solid #cbd5e1' }}
+                  >
+                    <option value="">Целевой run…</option>
+                    {runsHistory.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.id.slice(0, 8)} ({r.status})
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => void handleCompare()}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: 6,
+                      border: 'none',
+                      background: '#2563eb',
+                      color: '#fff',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Сравнить
+                  </button>
+                </div>
+                {compareErr && <div style={{ color: '#dc2626', fontSize: 12 }}>{compareErr}</div>}
+                {compareResult && (
+                  <div style={{ fontSize: 12 }}>
+                    <div style={{ display: 'flex', gap: 12, marginBottom: 6 }}>
+                      <span style={{ color: '#dc2626', fontWeight: 700 }}>+{compareResult.summary.new_count} новых</span>
+                      <span style={{ color: '#16a34a', fontWeight: 700 }}>-{compareResult.summary.fixed_count} исправлено</span>
+                      <span style={{ color: '#475569' }}>{compareResult.summary.persisting_count} повторяющихся</span>
+                    </div>
+                    {compareResult.new.slice(0, 3).map((item, idx) => (
+                      <div key={idx} style={{ color: '#991b1b', fontFamily: 'monospace', fontSize: 11 }}>
+                        [NEW] {item.category} {item.path}:{item.line ?? 0}
+                      </div>
+                    ))}
+                    {compareResult.fixed.slice(0, 3).map((item, idx) => (
+                      <div key={idx} style={{ color: '#166534', fontFamily: 'monospace', fontSize: 11 }}>
+                        [FIXED] {item.category} {item.path}:{item.line ?? 0}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

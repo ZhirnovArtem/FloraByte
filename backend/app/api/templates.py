@@ -45,7 +45,7 @@ def _seed_from_files(session: Session) -> None:
             is_template=True,
         )
         session.add(w)
-        existing.add(name)
+        existing[name] = w
     session.commit()
 
 

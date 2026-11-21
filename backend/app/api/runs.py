@@ -1,12 +1,20 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from sqlmodel import Session, select
 
 from app.core.db import get_session
 from app.core.models import NodeRun, Run
-from pathlib import Path
+from app.core.pdf_export import render_report_pdf
+from app.core.run_analytics import (
+    build_severity_dashboard,
+    compare_runs,
+    deduplicate_across_runs,
+    load_run_findings,
+)
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -45,13 +53,63 @@ def list_runs(session: Session = Depends(get_session), limit: int = 50):
     return {"runs": [_run_dict(r) for r in items]}
 
 
+@router.get("/compare")
+def compare_two_runs(
+    base: str = Query(..., description="Baseline run ID"),
+    target: str = Query(..., description="Target run ID"),
+    session: Session = Depends(get_session),
+):
+    base_run = session.get(Run, base)
+    target_run = session.get(Run, target)
+    if not base_run or not target_run:
+        raise HTTPException(404, "Run not found for comparison")
+
+    base_findings = load_run_findings(base_run)
+    target_findings = load_run_findings(target_run)
+    diff = compare_runs(base_findings, target_findings)
+    return {
+        "base_run": _run_dict(base_run),
+        "target_run": _run_dict(target_run),
+        **diff,
+    }
+
+
 @router.get("/{run_id}")
 def get_run(run_id: str, session: Session = Depends(get_session)):
     r = session.get(Run, run_id)
     if not r:
         raise HTTPException(404, "Run not found")
     nrs = session.exec(select(NodeRun).where(NodeRun.run_id == run_id)).all()
-    return _run_dict(r, list(nrs))
+    out = _run_dict(r, list(nrs))
+    out["dashboard"] = build_severity_dashboard(load_run_findings(r))
+    return out
+
+
+@router.get("/{run_id}/dedup")
+def get_run_dedup(run_id: str, session: Session = Depends(get_session)):
+    r = session.get(Run, run_id)
+    if not r:
+        raise HTTPException(404, "Run not found")
+
+    same_wf_runs = list(session.exec(select(Run).where(Run.workflow_id == r.workflow_id)).all())
+    same_wf_runs.sort(key=lambda item: item.started_at or item.finished_at or item.id)
+
+    prior_findings: list[dict] = []
+    prior_run_id: str | None = None
+    for prev in same_wf_runs:
+        if prev.id == r.id:
+            break
+        prior_run_id = prev.id
+        prior_findings.extend(load_run_findings(prev))
+
+    current_findings = load_run_findings(r)
+    dedup = deduplicate_across_runs(current_findings, prior_findings)
+    return {
+        "run_id": r.id,
+        "workflow_id": r.workflow_id,
+        "baseline_run_id": prior_run_id,
+        **dedup,
+    }
 
 
 @router.get("/{run_id}/report.json")
@@ -59,18 +117,15 @@ def get_report_json(run_id: str, session: Session = Depends(get_session)):
     r = session.get(Run, run_id)
     if not r:
         raise HTTPException(404, "Run not found")
-    # Look for report in summary or on disk
     summary = r.summary_json or {}
     paths = (summary.get("report") or {}).get("paths") or {}
     json_path = paths.get("json_path")
     if json_path and Path(json_path).exists():
         return FileResponse(json_path, media_type="application/json", filename="report.json")
-    # try standard location
     from app.config import get_settings
     p = get_settings().runs_dir / run_id / "reports" / "report.json"
     if p.exists():
         return FileResponse(p, media_type="application/json", filename="report.json")
-    # fallback from summary findings
     if "report" in summary and isinstance(summary["report"], dict):
         findings = summary["report"].get("findings")
         if findings is not None:
@@ -93,3 +148,22 @@ def get_report_md(run_id: str, session: Session = Depends(get_session)):
     if p.exists():
         return FileResponse(p, media_type="text/markdown", filename="report.md")
     return PlainTextResponse("Находок нет.\n")
+
+
+@router.get("/{run_id}/report.pdf")
+def get_report_pdf(run_id: str, session: Session = Depends(get_session)):
+    r = session.get(Run, run_id)
+    if not r:
+        raise HTTPException(404, "Run not found")
+    findings = load_run_findings(r)
+    pdf_bytes = render_report_pdf(
+        run_id=r.id,
+        status=r.status,
+        findings=findings,
+        ai_report=r.ai_report_json,
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="report.pdf"'},
+    )

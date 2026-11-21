@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { NodeTypeSpec, TemplateDto } from '../types/workflow';
 
 type NodeSidebarProps = {
@@ -6,6 +7,7 @@ type NodeSidebarProps = {
   templates: TemplateDto[];
   onAddNode: (spec: NodeTypeSpec) => void;
   onApplyTemplate: (template: TemplateDto) => void;
+  onGenerateWorkflow?: (prompt: string) => Promise<void>;
 };
 
 const GROUP_LABELS: Record<string, string> = {
@@ -26,7 +28,11 @@ export default function NodeSidebar({
   templates,
   onAddNode,
   onApplyTemplate,
+  onGenerateWorkflow,
 }: NodeSidebarProps) {
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [generating, setGenerating] = useState(false);
+
   const grouped = new Map<string, NodeTypeSpec[]>();
   for (const item of catalog) {
     const g = item.group || 'other';
@@ -39,6 +45,17 @@ export default function NodeSidebar({
     ...GROUP_ORDER.filter((g) => grouped.has(g)),
     ...[...grouped.keys()].filter((g) => !GROUP_ORDER.includes(g)),
   ];
+
+  const handleGenerate = async () => {
+    const trimmed = aiPrompt.trim();
+    if (!trimmed || !onGenerateWorkflow || generating) return;
+    setGenerating(true);
+    try {
+      await onGenerateWorkflow(trimmed);
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   return (
     <aside
@@ -66,6 +83,58 @@ export default function NodeSidebar({
           {catalogSource === 'api' ? 'API' : 'Offline'}
         </span>
       </div>
+
+      {onGenerateWorkflow && (
+        <div
+          style={{
+            marginBottom: 14,
+            padding: 10,
+            borderRadius: 8,
+            background: '#f0fdf4',
+            border: '1px solid #bbf7d0',
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#166534', marginBottom: 6 }}>
+            AI-генератор сценария
+          </div>
+          <input
+            type="text"
+            value={aiPrompt}
+            onChange={(e) => setAiPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void handleGenerate();
+            }}
+            placeholder="Напр.: git + секреты + telegram"
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              padding: '6px 8px',
+              borderRadius: 6,
+              border: '1px solid #86efac',
+              fontSize: 12,
+              marginBottom: 6,
+            }}
+          />
+          <button
+            type="button"
+            disabled={generating || !aiPrompt.trim()}
+            onClick={() => void handleGenerate()}
+            style={{
+              width: '100%',
+              padding: '6px 8px',
+              borderRadius: 6,
+              border: 'none',
+              background: generating || !aiPrompt.trim() ? '#94a3b8' : '#16a34a',
+              color: '#ffffff',
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: generating ? 'wait' : 'pointer',
+            }}
+          >
+            {generating ? 'Генерация…' : 'Сгенерировать граф'}
+          </button>
+        </div>
+      )}
 
       {templates.length > 0 && (
         <div style={{ marginBottom: 16 }}>

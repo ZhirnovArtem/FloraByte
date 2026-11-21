@@ -1,0 +1,27 @@
+{
+  "name": "Scheduled Nightly Scan",
+  "description": "Cron (02:00 UTC) → Git Clone → Secrets + SCA + SAST → Merge → Export + AI Explain",
+  "graph": {
+    "nodes": [
+      { "id": "t1", "type": "trigger.schedule", "params": { "cron": "0 2 * * *" }, "position": { "x": 40, "y": 200 } },
+      { "id": "g1", "type": "source.git_clone", "params": { "url": "https://github.com/TBagirov/training", "branch": "main" }, "position": { "x": 220, "y": 200 } },
+      { "id": "sc1", "type": "scanner.secrets", "params": {}, "position": { "x": 430, "y": 80 } },
+      { "id": "sc2", "type": "scanner.sca", "params": {}, "position": { "x": 430, "y": 200 } },
+      { "id": "sc3", "type": "scanner.sast", "params": {}, "position": { "x": 430, "y": 320 } },
+      { "id": "m1", "type": "findings.merge", "params": {}, "position": { "x": 640, "y": 200 } },
+      { "id": "e1", "type": "findings.export", "params": {}, "position": { "x": 840, "y": 110 } },
+      { "id": "ai1", "type": "ai.explain", "params": {}, "position": { "x": 840, "y": 280 } }
+    ],
+    "edges": [
+      { "id": "e1", "source": "t1", "target": "g1" },
+      { "id": "e2", "source": "g1", "target": "sc1" },
+      { "id": "e3", "source": "g1", "target": "sc2" },
+      { "id": "e4", "source": "g1", "target": "sc3" },
+      { "id": "e5", "source": "sc1", "target": "m1", "targetHandle": "a" },
+      { "id": "e6", "source": "sc2", "target": "m1", "targetHandle": "b" },
+      { "id": "e7", "source": "sc3", "target": "m1", "targetHandle": "c" },
+      { "id": "e8", "source": "m1", "target": "e1" },
+      { "id": "e9", "source": "m1", "sourceHandle": "findings", "target": "ai1", "targetHandle": "findings" }
+    ]
+  }
+}

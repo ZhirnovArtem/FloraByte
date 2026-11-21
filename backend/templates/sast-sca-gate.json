@@ -1,0 +1,26 @@
+{
+  "name": "SAST + SCA Quality Gate",
+  "description": "Upload ZIP → SCA + SAST → Merge → Export + If/Else (findings > 0) → Webhook (dry_run)",
+  "graph": {
+    "nodes": [
+      { "id": "t1", "type": "trigger.manual", "params": {}, "position": { "x": 40, "y": 180 } },
+      { "id": "s1", "type": "source.upload_zip", "params": { "upload_id": "" }, "position": { "x": 220, "y": 180 } },
+      { "id": "sc2", "type": "scanner.sca", "params": {}, "position": { "x": 420, "y": 100 } },
+      { "id": "sc3", "type": "scanner.sast", "params": {}, "position": { "x": 420, "y": 260 } },
+      { "id": "m1", "type": "findings.merge", "params": {}, "position": { "x": 620, "y": 180 } },
+      { "id": "e1", "type": "findings.export", "params": {}, "position": { "x": 820, "y": 80 } },
+      { "id": "if1", "type": "logic.if_else", "params": { "left": "findings.count", "op": ">", "right": "0" }, "position": { "x": 820, "y": 260 } },
+      { "id": "wh1", "type": "notify.webhook", "params": { "url": "https://example.org/webhook", "dry_run": true }, "position": { "x": 1050, "y": 200 } }
+    ],
+    "edges": [
+      { "id": "e1", "source": "t1", "target": "s1" },
+      { "id": "e2", "source": "s1", "target": "sc2" },
+      { "id": "e3", "source": "s1", "target": "sc3" },
+      { "id": "e4", "source": "sc2", "target": "m1", "targetHandle": "a" },
+      { "id": "e5", "source": "sc3", "target": "m1", "targetHandle": "b" },
+      { "id": "e6", "source": "m1", "target": "e1" },
+      { "id": "e7", "source": "m1", "sourceHandle": "findings", "target": "if1", "targetHandle": "in" },
+      { "id": "e8", "source": "if1", "sourceHandle": "true", "target": "wh1", "targetHandle": "report" }
+    ]
+  }
+}

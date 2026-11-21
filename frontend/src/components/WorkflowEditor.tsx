@@ -527,6 +527,28 @@ function WorkflowEditorContent() {
     }
   };
 
+  const handleGenerateWorkflow = async (prompt: string) => {
+    try {
+      const gen = await api.generateAiWorkflow(prompt);
+      const conv = fromBackendGraph(gen.graph, catalog);
+      if (lastUpload) {
+        conv.nodes = conv.nodes.map((n) =>
+          n.data.kind === 'source.upload_zip'
+            ? { ...n, data: { ...n.data, params: { ...(n.data.params ?? {}), upload_id: lastUpload.id } } }
+            : n,
+        );
+      }
+      setNodes(conv.nodes);
+      setEdges(conv.edges);
+      setWorkflowId(null);
+      setWorkflowName(gen.name || 'AI Workflow');
+      setStatusMsg(`Сценарий сгенерирован (режим: ${gen.mode}).`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatusMsg(`Ошибка генерации сценария: ${msg}`);
+    }
+  };
+
   const applyTemplate = async (tpl: TemplateDto) => {
     try {
       const copied = await api.copyTemplate(tpl.id);
@@ -814,6 +836,7 @@ function WorkflowEditorContent() {
           templates={templates}
           onAddNode={addNode}
           onApplyTemplate={applyTemplate}
+          onGenerateWorkflow={handleGenerateWorkflow}
         />
 
         <div

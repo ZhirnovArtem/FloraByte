@@ -2,7 +2,9 @@ import type {
   BackendGraph,
   CredentialDto,
   FindingDto,
+  GeneratedWorkflowDto,
   NodeTypeSpec,
+  RunCompareDto,
   RunDto,
   TemplateDto,
   UploadResponse,
@@ -166,7 +168,7 @@ export function subscribeRunEvents(
   return ws;
 }
 
-export async function downloadRunReport(runId: string, format: 'json' | 'md'): Promise<void> {
+export async function downloadRunReport(runId: string, format: 'json' | 'md' | 'pdf'): Promise<void> {
   const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/report.${format}`, { headers: authenticatedHeaders() });
   if (!res.ok) throw new Error(`Не удалось скачать отчёт: ${res.status}`);
   const blob = await res.blob();
@@ -178,4 +180,18 @@ export async function downloadRunReport(runId: string, format: 'json' | 'md'): P
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+export async function compareRuns(baseId: string, targetId: string): Promise<RunCompareDto> {
+  return requestJson<RunCompareDto>(
+    `/api/runs/compare?base=${encodeURIComponent(baseId)}&target=${encodeURIComponent(targetId)}`,
+  );
+}
+
+export async function generateAiWorkflow(prompt: string): Promise<GeneratedWorkflowDto> {
+  return requestJson<GeneratedWorkflowDto>('/api/ai/generate-workflow', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  });
 }
