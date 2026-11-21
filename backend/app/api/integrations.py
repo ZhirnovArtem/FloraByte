@@ -23,8 +23,10 @@ from app.nodes.ai.llm_client import is_private_or_local_url
 from app.nodes.ai.providers import PROVIDER_SPECS, provider_manager
 from app.nodes.notify.email import (
     extract_email_report_summary,
+    normalize_resend_api_key,
     resolve_email_runtime_config,
     send_email_message,
+    validate_resend_api_key,
 )
 from app.nodes.notify.telegram import (
     _format_message,
@@ -617,7 +619,13 @@ def _merge_email_test_cfg(session: Session, user: Optional[User], body: EmailInt
     transport = (body.transport or saved["transport"] or "smtp").strip().lower()
     if transport not in ("smtp", "resend"):
         raise HTTPException(400, f"Неизвестный транспорт почты: {transport}")
-    secret = body.secret.strip() or saved["secret"]
+    secret = body.secret.strip()
+    if not secret and saved["transport"] == transport:
+        secret = saved["secret"]
+    if not secret and transport == "resend":
+        secret = os.environ.get("RESEND_API_KEY", "").strip()
+    if transport == "resend" and secret:
+        secret = normalize_resend_api_key(secret)
     from_email = body.from_email.strip() or saved["from_email"]
     if transport == "resend" and (not from_email or from_email == "noreply@florabyte.local"):
         from_email = "onboarding@resend.dev"
@@ -671,14 +679,18 @@ def save_email_integration(
 
     key = _integ_key(user, "email")
     row = session.get(IntegrationSetting, key)
+    prev_transport = str((row.config_json or {}).get("transport") or "").strip().lower() if row else ""
     secret = body.secret.strip()
-    if not secret and row and row.encrypted_secret:
+    if not secret and row and row.encrypted_secret and prev_transport == transport:
         try:
             secret = decrypt(row.encrypted_secret).strip()
         except Exception:
             secret = ""
-    if transport == "resend" and not secret:
-        raise HTTPException(400, "Укажите API-ключ Resend (re_...).")
+    if transport == "resend":
+        try:
+            secret = validate_resend_api_key(secret)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     from_email = body.from_email.strip()
     if not from_email:

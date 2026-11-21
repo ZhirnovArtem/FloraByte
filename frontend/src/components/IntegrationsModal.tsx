@@ -364,12 +364,19 @@ export default function IntegrationsModal({
   };
 
   const applyEmailPreset = (preset: 'resend' | 'gmail' | 'yandex' | 'mailru') => {
+    setEmailStatusMsg('');
     if (preset === 'resend') {
+      if (emailTransport !== 'resend') {
+        setEmailSecret('');
+      }
       setEmailTransport('resend');
-      if (!fromEmail || fromEmail === 'noreply@florabyte.local') {
+      if (!fromEmail || fromEmail === 'noreply@florabyte.local' || fromEmail === smtpUser) {
         setFromEmail('onboarding@resend.dev');
       }
       return;
+    }
+    if (emailTransport !== 'smtp') {
+      setEmailSecret('');
     }
     setEmailTransport('smtp');
     if (preset === 'gmail') {
@@ -384,10 +391,44 @@ export default function IntegrationsModal({
     }
   };
 
+  const savedEmailMatchesTransport =
+    Boolean(integrations.email?.secret_preview) && integrations.email?.transport === emailTransport;
+
+  const normalizeResendInput = (raw: string) => {
+    let k = raw.trim().replace(/^["']|["']$/g, '').trim();
+    if (k.toLowerCase().startsWith('bearer ')) {
+      k = k.slice(7).trim().replace(/^["']|["']$/g, '').trim();
+    }
+    return k;
+  };
+
+  const validateEmailSecretClient = (): string | null => {
+    const cleaned = emailTransport === 'resend' ? normalizeResendInput(emailSecret) : emailSecret.trim();
+    if (!cleaned) {
+      if (!savedEmailMatchesTransport) {
+        return emailTransport === 'resend'
+          ? 'Укажите Resend API Key (должен начинаться с «re_»). Получить ключ можно на resend.com/api-keys.'
+          : 'Укажите пароль приложения SMTP.';
+      }
+      return null;
+    }
+    if (emailTransport === 'resend' && (!cleaned.startsWith('re_') || cleaned.length < 8 || /\s/.test(cleaned))) {
+      return 'Некорректный формат Resend API Key: ключ должен начинаться с «re_» (не используйте пароль приложения от почты). Создайте новый ключ на resend.com/api-keys.';
+    }
+    return null;
+  };
+
   const handleTestEmail = async () => {
+    const clientErr = validateEmailSecretClient();
+    if (clientErr) {
+      setEmailStatusMsg(`❌ ${clientErr}`);
+      return;
+    }
     setEmailBusy(true);
     setEmailStatusMsg('Отправляем тестовое письмо…');
     try {
+      const secretToSend =
+        emailTransport === 'resend' ? normalizeResendInput(emailSecret) : emailSecret.trim();
       const res = await api.testEmailIntegration({
         transport: emailTransport,
         smtp_host: smtpHost,
@@ -396,7 +437,7 @@ export default function IntegrationsModal({
         from_email: fromEmail,
         default_to: defaultToEmail,
         use_tls: true,
-        secret: emailSecret,
+        secret: secretToSend,
       });
       setEmailStatusMsg(res.ok ? `✅ ${res.detail || 'Письмо отправлено'}` : `❌ ${res.error || 'Ошибка отправки'}`);
     } catch (err) {
@@ -407,9 +448,16 @@ export default function IntegrationsModal({
   };
 
   const handleSaveEmail = async () => {
+    const clientErr = validateEmailSecretClient();
+    if (clientErr) {
+      setEmailStatusMsg(`❌ ${clientErr}`);
+      return;
+    }
     setEmailBusy(true);
     setEmailStatusMsg('Сохранение настроек почты…');
     try {
+      const secretToSend =
+        emailTransport === 'resend' ? normalizeResendInput(emailSecret) : emailSecret.trim();
       await api.saveEmailIntegration({
         transport: emailTransport,
         smtp_host: smtpHost,
@@ -418,7 +466,7 @@ export default function IntegrationsModal({
         from_email: fromEmail,
         default_to: defaultToEmail,
         use_tls: true,
-        secret: emailSecret,
+        secret: secretToSend,
         enabled: true,
       });
       const refreshed = await api.getIntegrations();
@@ -917,15 +965,15 @@ export default function IntegrationsModal({
             <label style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>
               <span style={{ fontWeight: 600 }}>
                 {emailTransport === 'resend' ? 'Resend API Key' : 'Пароль приложения SMTP (App Password)'}{' '}
-                {integrations.email?.secret_preview ? `(текущий: ${integrations.email.secret_preview})` : ''}
+                {savedEmailMatchesTransport ? `(текущий: ${integrations.email?.secret_preview})` : ''}
               </span>
               <input
                 type="password"
                 value={emailSecret}
                 onChange={(e) => setEmailSecret(e.target.value)}
                 placeholder={
-                  integrations.email?.secret_preview
-                    ? 'Оставьте пустым, чтобы сохранить текущий'
+                  savedEmailMatchesTransport
+                    ? 'Оставьте пустым, чтобы сохранить текущий (или вставьте новый)'
                     : emailTransport === 'resend'
                       ? 're_...'
                       : 'Пароль приложения (16 символов)'
@@ -933,8 +981,8 @@ export default function IntegrationsModal({
                 style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', marginTop: 4, borderRadius: 6, border: '1px solid #cbd5e1' }}
               />
               {emailTransport === 'resend' && (
-                <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
-                  Работает по HTTPS (порт 443) даже на бесплатном тарифе Render, где SMTP-порты 25/465/587 заблокированы.
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 3, lineHeight: 1.4 }}>
+                  Работает по HTTPS (порт 443) даже на бесплатном тарифе Render. Ключ должен начинаться с <code>re_</code> (создаётся на resend.com/api-keys). С адресом <code>onboarding@resend.dev</code> Resend доставляет письма только на email вашего аккаунта Resend.
                 </div>
               )}
             </label>

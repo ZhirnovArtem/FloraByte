@@ -27,6 +27,31 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 RESEND_API_URL = "https://api.resend.com/emails"
 
 
+def normalize_resend_api_key(raw: str) -> str:
+    """Trim whitespace, quotes, and optional 'Bearer ' prefix from a pasted Resend API key."""
+    key = (raw or "").strip().strip('"').strip("'").strip()
+    if key.lower().startswith("bearer "):
+        key = key[7:].strip().strip('"').strip("'").strip()
+    return key
+
+
+def validate_resend_api_key(raw: str) -> str:
+    """Normalize and validate that the key matches Resend's 're_...' API key format."""
+    key = normalize_resend_api_key(raw)
+    if not key:
+        raise ValueError(
+            "Укажите API-ключ Resend (начинается с «re_»). "
+            "Получите его в кабинете resend.com/api-keys."
+        )
+    if not key.startswith("re_") or len(key) < 8 or any(ch.isspace() for ch in key):
+        raise ValueError(
+            "Некорректный формат Resend API Key: ключ должен начинаться с «re_» и не содержать пробелов "
+            "(не используйте здесь пароль приложения от почты или ключ от другой нейросети). "
+            "Создайте новый ключ на resend.com/api-keys и вставьте его в поле «Resend API Key»."
+        )
+    return key
+
+
 class Params(BaseModel):
     to_email: str = Field("", description="Recipient email address (optional if configured in Integrations)")
     subject: str = Field("FloraByte Security Report", description="Email subject")
@@ -137,6 +162,8 @@ def resolve_email_runtime_config(
     smtp_user = str(cfg.get("smtp_user") or env_user or "").strip()
     use_tls = bool(cfg["use_tls"]) if "use_tls" in cfg else env_tls
     secret = cred_secret or saved_secret or (env_resend if transport == "resend" else env_pass)
+    if transport == "resend" and secret:
+        secret = normalize_resend_api_key(secret)
     default_to = str(cfg.get("default_to") or env_to or owner_email or "").strip()
     from_email = str(cfg.get("from_email") or env_from or smtp_user or "").strip()
     if not from_email:
@@ -206,8 +233,7 @@ async def _send_resend_async(
     subject: str,
     body: str,
 ) -> str:
-    if not api_key:
-        raise ValueError("Не указан API-ключ Resend (в разделе «Интеграции → Email»).")
+    api_key = validate_resend_api_key(api_key)
     async with httpx.AsyncClient(timeout=20.0) as client:
         resp = await client.post(
             RESEND_API_URL,
@@ -224,6 +250,19 @@ async def _send_resend_async(
         )
     if resp.status_code >= 400:
         err_detail = redact_text(resp.text[:300], [api_key])
+        if resp.status_code == 401:
+            raise ValueError(
+                f"Resend API отклонил ключ (401: API key is invalid). "
+                f"Проверьте ключ на resend.com/api-keys (возможно, ключ отозван, удалён или вставлен с ошибкой — "
+                f"он должен начинаться с «re_»), затем вставьте новый ключ в поле «Resend API Key» и нажмите «Сохранить почту». "
+                f"Ответ Resend: {err_detail}"
+            )
+        if resp.status_code == 403 and "only send testing emails to your own email" in err_detail.lower():
+            raise ValueError(
+                f"Resend ограничил тестовую отправку (403): с адреса onboarding@resend.dev можно отправлять письма "
+                f"только на email вашего аккаунта Resend. Для отправки на {to_addr} подтвердите домен на resend.com/domains "
+                f"или укажите email вашего аккаунта Resend."
+            )
         raise ValueError(f"Resend API вернул {resp.status_code}: {err_detail}")
     try:
         data = resp.json()

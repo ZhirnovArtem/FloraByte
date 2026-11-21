@@ -278,3 +278,80 @@ def test_email_integration_smtp_ssl_and_resend_and_send_run(ai_gen_client: TestC
         assert test_res.json()["ok"] is True
         smtp_ssl_cls.assert_called_once_with("smtp.yandex.ru", 465, timeout=15)
 
+    # 5. Switching from SMTP back to Resend without a re_... key must NOT reuse the SMTP password
+    switch_bad = ai_gen_client.put(
+        "/api/integrations/email",
+        json={
+            "transport": "resend",
+            "from_email": "onboarding@resend.dev",
+            "default_to": "reports@company.com",
+            "secret": "",
+            "enabled": True,
+        },
+    )
+    assert switch_bad.status_code == 400
+    assert "re_" in switch_bad.json()["detail"]
+
+    test_bad_switch = ai_gen_client.post(
+        "/api/integrations/email/test",
+        json={"transport": "resend", "default_to": "reports@company.com", "secret": ""},
+    )
+    assert test_bad_switch.status_code == 200
+    assert test_bad_switch.json()["ok"] is False
+    assert "re_" in test_bad_switch.json()["error"]
+
+    # Non-re_ key rejected immediately; Bearer prefix + quotes normalized cleanly
+    bad_fmt = ai_gen_client.put(
+        "/api/integrations/email",
+        json={
+            "transport": "resend",
+            "from_email": "onboarding@resend.dev",
+            "default_to": "reports@company.com",
+            "secret": "not_a_resend_ezop",
+            "enabled": True,
+        },
+    )
+    assert bad_fmt.status_code == 400
+    assert "re_" in bad_fmt.json()["detail"]
+
+    norm_ok = ai_gen_client.put(
+        "/api/integrations/email",
+        json={
+            "transport": "resend",
+            "from_email": "onboarding@resend.dev",
+            "default_to": "reports@company.com",
+            "secret": '  "Bearer re_clean_key_998877"  ',
+            "enabled": True,
+        },
+    )
+    assert norm_ok.status_code == 200
+    assert norm_ok.json()["secret_preview"].endswith("8877")
+
+    # Resend 401 produces clear actionable Russian message without exposing key
+    class Resp401:
+        status_code = 401
+        text = '{"message":"API key is invalid","name":"validation_error","statusCode":401}'
+
+    class Client401:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **kw):
+            return Resp401()
+
+    with patch("app.nodes.notify.email.httpx.AsyncClient", Client401):
+        res_401 = ai_gen_client.post(
+            "/api/integrations/email/test",
+            json={"transport": "resend", "default_to": "reports@company.com"},
+        )
+        assert res_401.status_code == 200
+        assert res_401.json()["ok"] is False
+        assert "resend.com/api-keys" in res_401.json()["error"]
+        assert "re_clean_key_998877" not in res_401.json()["error"]
+
