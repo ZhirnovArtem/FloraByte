@@ -38,6 +38,8 @@ _RULE_TO_CLASS: dict[str, str] = {
     "github-token": "api-key",
     "slack-token": "api-key",
     "telegram-bot-token": "api-key",
+    "secret-fallback": "secret-fallback",
+    "recoverable-token": "recoverable-token",
     "bearer-token": "configuration-token",
     "jwt-token": "configuration-token",
     "private-key": "private-key",
@@ -108,13 +110,16 @@ def scan(root: Path, params: dict | None = None) -> list[Finding]:
         seen.add(key)
 
         sev = f.severity.name if f.severity.name in ("LOW", "MEDIUM", "HIGH", "CRITICAL") else "MEDIUM"
+        end_line = f.metadata.get("end_line", f.line)
+        if not isinstance(end_line, int) or end_line < f.line or end_line > f.line + 14:
+            end_line = f.line
         out.append(
             Finding(
                 category="SECRET",
                 path=rel_path,
                 **{"class": cls},
                 line=f.line,
-                endLine=f.line,
+                endLine=end_line,
                 severity=sev,
                 description=redact_text(f.description),
                 remediation=f.recommendation,

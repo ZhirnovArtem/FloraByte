@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
 
@@ -10,6 +10,7 @@ class FileContext:
     code: str
     lines: tuple[str, ...]
     profile: str | None = None
+    project_contexts: tuple["FileContext", ...] = field(default=(), repr=False, compare=False)
 
 
 def strip_comments_preserve_offsets(text: str) -> str:

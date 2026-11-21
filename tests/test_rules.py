@@ -42,3 +42,69 @@ def test_evidence_masks_secret_like_values(tmp_path):
     result=run(tmp_path)
     assert result.findings
     assert "super-secret-value" not in result.findings[0].evidence
+
+
+def test_spring_general_sast_rules_and_controls(tmp_path):
+    src = tmp_path / "src" / "main" / "kotlin" / "demo"
+    src.mkdir(parents=True)
+    (src / "Orders.kt").write_text(
+        '''
+@RestController
+@RequestMapping("/api/orders")
+class OrderController(private val dao: OrderDao) {
+    @GetMapping("/search")
+    fun search(@RequestParam q: String) = jdbc.queryForList("SELECT code FROM orders WHERE code = '$q'", String::class.java)
+
+    @GetMapping("/safe")
+    fun safe(@RequestParam q: String) = jdbc.queryForList("SELECT code FROM orders WHERE code = ?", String::class.java, q)
+
+    @GetMapping("/{orderId}")
+    fun getOne(@PathVariable orderId: Long) = dao.findById(orderId)
+
+    @GetMapping("/dump")
+    fun dump() = jdbc.queryForList("SELECT id, owner_id FROM orders")
+}
+
+@RestController
+class PublicInfoController {
+    @GetMapping("/api/public/info")
+    fun info() = listOf("v1", "ok")
+}
+
+@Repository
+class OrderDao(private val jdbc: JdbcTemplate) {
+    fun findById(orderId: Long) = jdbc.query(
+        "SELECT id, owner_id, notes FROM orders WHERE id = ?",
+        { rs, _ -> rs.getString(1) },
+        orderId,
+    ).firstOrNull()
+}
+
+@Configuration
+class SecurityAndCors {
+    fun cors() = CorsConfiguration().apply {
+        allowedOriginPatterns = listOf("*")
+        allowCredentials = true
+    }
+
+    fun sec(http: HttpSecurity) = http.authorizeHttpRequests { rules ->
+        rules.requestMatchers(GET, "/api/public/info").permitAll()
+        rules.requestMatchers(GET, "/api/orders/dump").permitAll()
+        rules.requestMatchers("/api/orders/**").hasRole("STAFF")
+    }
+
+    fun tls(conn: HttpsURLConnection) {
+        conn.hostnameVerifier = HostnameVerifier { _, _ -> true }
+    }
+}
+''',
+        encoding="utf-8",
+    )
+    findings = run(tmp_path).findings
+    rule_ids = {f.rule_id for f in findings}
+    assert {"SAST-INJ-001", "SAST-AUTH-001", "SAST-SEC-003", "SAST-SEC-001", "SAST-TLS-001"} <= rule_ids
+    # Ensure static /api/public/info permitAll() and parameterized query did NOT trigger
+    sec001_lines = [f.line for f in findings if f.rule_id == "SAST-SEC-001"]
+    assert len(sec001_lines) == 1
+    inj_lines = [f.line for f in findings if f.rule_id == "SAST-INJ-001"]
+    assert len(inj_lines) == 1

@@ -28,3 +28,31 @@ def test_masks_evidence():
     evidence = result.findings[0].evidence
     assert "***" in evidence
     assert "supersecret" not in evidence
+
+
+def test_detects_secret_fallback_and_ignores_safe_default():
+    bad = 'val tok = System.getenv("SVC_TOKEN") ?: "x9kL2pQ8mR4vN7wB"'
+    res_bad = run(bad, "Client.kt")
+    assert any(f.type == "secret-fallback" for f in res_bad.findings)
+    assert all("x9kL2pQ8mR4vN7wB" not in (f.evidence or "") for f in res_bad.findings)
+
+    good = 'val tok = System.getenv("SVC_TOKEN") ?: "changeme"'
+    res_good = run(good, "Client.kt")
+    assert not any(f.type == "secret-fallback" for f in res_good.findings)
+
+
+def test_detects_recoverable_token_and_masks_parts():
+    code = '''
+fun headers(): HttpHeaders {
+    val head = "tok_prefix_"
+    val tail = "A9b8C7d6E5f4G3h2"
+    val full = head + tail
+    return HttpHeaders().apply { setBearerAuth(full) }
+}
+'''
+    res = run(code, "Headers.kt")
+    rec = [f for f in res.findings if f.type == "recoverable-token"]
+    assert len(rec) == 1
+    assert rec[0].line == 3
+    assert "A9b8C7d6E5f4G3h2" not in (rec[0].evidence or "")
+    assert "tok_prefix_" not in (rec[0].evidence or "")

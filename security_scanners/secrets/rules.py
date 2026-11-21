@@ -24,6 +24,7 @@ class DefaultSecretRules:
             DefaultSecretRules.slack_token(), DefaultSecretRules.jwt_token(),
             DefaultSecretRules.jdbc_url_with_password(), DefaultSecretRules.mongodb_uri_with_password(),
             DefaultSecretRules.postgres_uri_with_password(), DefaultSecretRules.github_token(),
+            DefaultSecretRules.secret_fallback(),
             DefaultSecretRules.generic_secret_assignment(),
         ]
 
@@ -155,6 +156,23 @@ class DefaultSecretRules:
             pattern=re.compile(r"""gh[pousr]_[A-Za-z0-9]{36,}"""),
             severity=Severity.CRITICAL, description="GitHub-токен в коде",
             recommendation="Отзовите токен в GitHub Settings → Tokens"
+        )
+
+    @staticmethod
+    def secret_fallback() -> SecretRule:
+        return SecretRule(
+            id="secret-fallback",
+            name="Hardcoded secret fallback",
+            pattern=re.compile(
+                r"""(?:System\.getenv|System\.getProperty|getenv|env\.getProperty)\s*\([^)]+\)\s*(?:\?:|\?\?|\.orElse\s*\()\s*["']([^"'\n]{6,})["']"""
+                r"""|\$\{[A-Za-z0-9_]*(?:SECRET|TOKEN|KEY|PASS|PWD|AUTH|CREDENTIAL)[A-Za-z0-9_]*:([^}\s]{6,})\}"""
+            ),
+            severity=Severity.HIGH,
+            description="Встроенный секрет используется как значение по умолчанию при чтении из окружения",
+            recommendation="Удалите секрет по умолчанию и требуйте обязательную переменную окружения",
+            allowlist=[
+                re.compile(r"""(?:\?:|\?\?|\.orElse\s*\(|:)\s*["']?(?:changeit|changeme|example|dummy|test|dev|local|localhost|none|null|true|false|your[-_]?[A-Za-z0-9_-]*|<[^>]+>|\d+)["']?""", re.IGNORECASE),
+            ],
         )
 
     @staticmethod
