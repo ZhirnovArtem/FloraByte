@@ -109,6 +109,32 @@ def test_zip_symlink_and_bomb_rejected(tmp_path: Path):
             safe_extract(zf, tmp_path / "bomb")
 
 
+def test_zip_directory_entries_allowed_and_zip_slip_blocked(tmp_path: Path):
+    # Standard directory entries such as "training-main/" must succeed
+    buf_ok = io.BytesIO()
+    with zipfile.ZipFile(buf_ok, "w") as zf:
+        zf.writestr("training-main/", "")
+        zf.writestr("training-main/src/", "")
+        zf.writestr("training-main/src/App.kt", "fun main() {}")
+    buf_ok.seek(0)
+    out_dir = tmp_path / "ok"
+    out_dir.mkdir()
+    with zipfile.ZipFile(buf_ok, "r") as zf:
+        safe_extract(zf, out_dir)
+    assert (out_dir / "training-main" / "src").is_dir()
+    assert (out_dir / "training-main" / "src" / "App.kt").read_text() == "fun main() {}"
+
+    # Unsafe paths must remain blocked
+    for bad in ("../secret.txt", "/etc/passwd", "C:\\Windows\\win.ini", "training-main//evil.txt", "/"):
+        buf_bad = io.BytesIO()
+        with zipfile.ZipFile(buf_bad, "w") as zf:
+            zf.writestr(bad, "x")
+        buf_bad.seek(0)
+        with zipfile.ZipFile(buf_bad, "r") as zf:
+            with pytest.raises(ValueError, match="Zip-slip"):
+                safe_extract(zf, tmp_path / "bad")
+
+
 @pytest.mark.asyncio
 async def test_webhook_ssrf_metadata_and_dns_pinning(monkeypatch):
     monkeypatch.setenv("WEBHOOK_HOST_ALLOWLIST", "")

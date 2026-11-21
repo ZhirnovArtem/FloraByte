@@ -61,20 +61,30 @@ def safe_extract(zf: zipfile.ZipFile, dest: Path) -> None:
             raise ValueError(f"Zip contains too many files (>{MAX_FILES})")
 
         member = info.filename.replace("\\", "/")
-        is_dir = member.endswith("/") or info.is_dir()
-        clean_member = member.rstrip("/")
-        if not clean_member:
-            continue
 
-        # Reject absolute paths, traversal, empty path segments, and Windows drive letters.
+        # Разрешаем стандартные записи директорий с завершающим "/"
+        is_dir = info.is_dir() or member.endswith("/")
+
+        # Убираем только один завершающий "/" у директории
+        normalized_member = (
+            member[:-1] if is_dir and member.endswith("/") else member
+        )
+
+        parts = normalized_member.split("/")
+
+        # Защита от Zip Slip
         if (
-            clean_member.startswith("/")
-            or any(part in ("..", "") for part in clean_member.split("/"))
-            or re.match(r"^[A-Za-z]:", clean_member)
+            not normalized_member
+            or normalized_member.startswith("/")
+            or any(part in ("..", "") for part in parts)
+            or re.match(r"^[A-Za-z]:", normalized_member)
         ):
-            raise ValueError(f"Zip-slip: unsafe archive member: {info.filename}")
+            raise ValueError(
+                f"Zip-slip: unsafe archive member: {info.filename}"
+            )
 
-        target = (dest / clean_member).resolve()
+        target = (dest / normalized_member).resolve()
+
         if not target.is_relative_to(dest_resolved):
             raise ValueError(f"Zip-slip detected: {info.filename}")
 
