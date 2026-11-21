@@ -8,7 +8,7 @@ from typing import Any, Optional
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
@@ -19,14 +19,8 @@ from app.core.db import get_session
 from app.core.masking import mask_secret, redact_text
 from app.core.models import IntegrationSetting, Run, User
 from app.core.run_analytics import load_run_findings
-from app.nodes.ai.llm_client import (
-    DEFAULT_PROVIDER_MODELS,
-    OPENAI_STYLE_PROVIDERS,
-    SUPPORTED_LLM_PROVIDERS,
-    is_private_or_local_url,
-    resolve_base_url,
-    verify_openai_compatible_connection,
-)
+from app.nodes.ai.llm_client import is_private_or_local_url
+from app.nodes.ai.providers import PROVIDER_SPECS, provider_manager
 from app.nodes.notify.telegram import (
     _format_message,
     normalize_bot_token,
@@ -39,11 +33,12 @@ router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
 
 class AiIntegrationUpdate(BaseModel):
-    provider: str = Field("gemini", description="gemini | openai_compatible")
-    model: str = Field("gemini-2.5-flash", description="Model identifier")
-    base_url: str = Field("", description="Optional OpenAI-compatible base URL")
+    provider: str = Field("gemini", description="Provider id from /api/integrations/ai/providers")
+    model: str = Field("", description="Model identifier")
+    base_url: str = Field("", description="Optional provider base URL")
     api_key: str = Field("", description="Optional new API key (keeps existing if blank)")
     enabled: bool = True
+    activate: bool = True
 
 
 class AiIntegrationTest(BaseModel):
@@ -51,6 +46,16 @@ class AiIntegrationTest(BaseModel):
     model: str = ""
     base_url: str = ""
     api_key: str = ""
+
+
+class AiModelsRequest(BaseModel):
+    provider: str = ""
+    base_url: str = ""
+    api_key: str = ""
+
+
+class AiActivateRequest(BaseModel):
+    provider: str = Field(..., min_length=1)
 
 
 class TelegramIntegrationUpdate(BaseModel):
@@ -78,48 +83,113 @@ def _get_integ_row(session: Session, user: Optional[User], kind: str) -> Integra
     return session.get(IntegrationSetting, kind)
 
 
+def _profile_key(user: Optional[User], provider: str) -> str:
+    pid = provider.strip().lower()
+    return f"{user.id}:ai:{pid}" if user is not None else f"ai:{pid}"
+
+
+def _decrypt_row_secret(row: IntegrationSetting | None) -> str:
+    if not row or not row.encrypted_secret:
+        return ""
+    try:
+        return decrypt(row.encrypted_secret).strip()
+    except Exception:
+        return ""
+
+
+def _is_configured_provider(provider: str, key: str, base_url: str) -> bool:
+    if key:
+        return True
+    spec = PROVIDER_SPECS.get(provider)
+    if not spec or spec.auth_type != "optional_key":
+        return False
+    if provider in ("ollama", "vllm"):
+        return bool(base_url)
+    return is_private_or_local_url(base_url)
+
+
 def _read_ai_status(session: Session, user: Optional[User] = None) -> dict[str, Any]:
     settings = get_settings()
     row = _get_integ_row(session, user, "ai")
+    env_provider = (settings.llm_provider or "gemini").strip().lower()
     env_key = (settings.llm_api_key or os.getenv("GEMINI_API_KEY", "")).strip()
+
     if row and row.enabled:
         cfg = row.config_json or {}
-        saved_key = ""
-        if row.encrypted_secret:
-            try:
-                saved_key = decrypt(row.encrypted_secret).strip()
-            except Exception:
-                saved_key = ""
-        effective_key = saved_key or env_key
-        provider = str(cfg.get("provider") or settings.llm_provider or "gemini").strip().lower()
-        base_url = resolve_base_url(provider, str(cfg.get("base_url") or settings.llm_base_url or ""))
-        is_local = provider in ("ollama", "vllm") or (
-            provider == "openai_compatible" and is_private_or_local_url(base_url)
+        provider = str(cfg.get("provider") or env_provider or "gemini").strip().lower()
+        spec = PROVIDER_SPECS.get(provider)
+        prof_row = session.get(IntegrationSetting, _profile_key(user, provider))
+        saved_key = _decrypt_row_secret(prof_row) or _decrypt_row_secret(row)
+        effective_key = saved_key or (env_key if provider == env_provider else "")
+        raw_base = str(cfg.get("base_url") or (prof_row.config_json or {}).get("base_url") if prof_row else cfg.get("base_url") or "")
+        base_url = spec.default_base_url if (spec and not raw_base) else raw_base
+        model = str(cfg.get("model") or (spec.default_model if spec else "") or "gemini-2.5-flash")
+        configured = _is_configured_provider(provider, effective_key, base_url)
+        source = (
+            "settings"
+            if saved_key
+            else ("env" if (env_key and provider == env_provider) else ("local" if configured else "none"))
         )
         return {
-            "configured": bool(effective_key or is_local),
+            "configured": configured,
             "enabled": row.enabled,
-            "source": "settings" if saved_key else ("env" if env_key else ("local" if is_local else "none")),
+            "source": source,
             "provider": provider,
-            "model": str(cfg.get("model") or DEFAULT_PROVIDER_MODELS.get(provider) or os.getenv("GEMINI_MODEL", "") or "gemini-2.5-flash"),
+            "provider_label": spec.label if spec else provider,
+            "model": model,
             "base_url": base_url,
             "api_key_preview": mask_secret(effective_key, keep_last=4) if effective_key else "",
         }
 
-    default_provider = (settings.llm_provider or "gemini").strip().lower()
-    default_base = resolve_base_url(default_provider, settings.llm_base_url)
-    is_default_local = default_provider in ("ollama", "vllm") or (
-        default_provider == "openai_compatible" and is_private_or_local_url(default_base)
+    default_spec = PROVIDER_SPECS.get(env_provider)
+    default_base = (
+        settings.llm_base_url
+        if env_provider != "gemini"
+        else (default_spec.default_base_url if default_spec else "")
     )
+    default_model = (
+        os.getenv("GEMINI_MODEL", "").strip()
+        or (default_spec.default_model if default_spec else "")
+        or settings.llm_model
+        or "gemini-2.5-flash"
+    )
+    configured = _is_configured_provider(env_provider, env_key, default_base)
     return {
-        "configured": bool(env_key or is_default_local),
-        "enabled": bool(env_key or is_default_local),
-        "source": "env" if env_key else ("local" if is_default_local else "none"),
-        "provider": default_provider,
-        "model": os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_PROVIDER_MODELS.get(default_provider) or settings.llm_model or "gemini-2.5-flash",
+        "configured": configured,
+        "enabled": configured,
+        "source": "env" if env_key else ("local" if configured else "none"),
+        "provider": env_provider,
+        "provider_label": default_spec.label if default_spec else env_provider,
+        "model": default_model,
         "base_url": default_base,
         "api_key_preview": mask_secret(env_key, keep_last=4) if env_key else "",
     }
+
+
+def _list_saved_ai_profiles(session: Session, user: Optional[User]) -> list[dict[str, Any]]:
+    active = _read_ai_status(session, user)
+    active_provider = active["provider"] if active["configured"] else ""
+    profiles: list[dict[str, Any]] = []
+    for pid, spec in PROVIDER_SPECS.items():
+        row = session.get(IntegrationSetting, _profile_key(user, pid))
+        if not row or not row.enabled:
+            continue
+        cfg = row.config_json or {}
+        key = _decrypt_row_secret(row)
+        base_url = str(cfg.get("base_url") or spec.default_base_url)
+        model = str(cfg.get("model") or spec.default_model)
+        profiles.append(
+            {
+                "provider": pid,
+                "label": spec.label,
+                "model": model,
+                "base_url": base_url,
+                "configured": _is_configured_provider(pid, key, base_url),
+                "is_active": pid == active_provider and active["source"] == "settings",
+                "api_key_preview": mask_secret(key, keep_last=4) if key else "",
+            }
+        )
+    return profiles
 
 
 def _read_telegram_status(session: Session, user: Optional[User] = None) -> dict[str, Any]:
@@ -172,6 +242,18 @@ def get_integrations(
     }
 
 
+@router.get("/ai/providers")
+def list_ai_providers(
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
+    return {
+        "providers": provider_manager.list_specs(),
+        "profiles": _list_saved_ai_profiles(session, user),
+        "active": _read_ai_status(session, user),
+    }
+
+
 @router.put("/ai")
 def save_ai_integration(
     body: AiIntegrationUpdate,
@@ -179,28 +261,126 @@ def save_ai_integration(
     user: Optional[User] = Depends(get_current_user),
 ):
     provider = body.provider.strip().lower() or "gemini"
-    if provider not in SUPPORTED_LLM_PROVIDERS:
-        raise HTTPException(400, "provider must be gemini, ollama, vllm, or openai_compatible")
+    if provider not in PROVIDER_SPECS:
+        raise HTTPException(400, f"Неизвестный AI-провайдер: {provider}")
+    spec = PROVIDER_SPECS[provider]
 
-    key = _integ_key(user, "ai")
-    row = session.get(IntegrationSetting, key)
-    secret = row.encrypted_secret if row else ""
+    prof_key = _profile_key(user, provider)
+    prof_row = session.get(IntegrationSetting, prof_key)
+    active_key = _integ_key(user, "ai")
+    active_row = session.get(IntegrationSetting, active_key)
+
+    secret = prof_row.encrypted_secret if prof_row else ""
+    if not secret and active_row and (active_row.config_json or {}).get("provider") == provider:
+        secret = active_row.encrypted_secret
     if body.api_key.strip():
         secret = encrypt(body.api_key.strip())
 
-    if not row:
-        row = IntegrationSetting(kind=key)
-    row.enabled = body.enabled
-    row.encrypted_secret = secret
-    row.config_json = {
-        "provider": provider,
-        "model": body.model.strip() or DEFAULT_PROVIDER_MODELS.get(provider) or "gemini-2.5-flash",
-        "base_url": resolve_base_url(provider, body.base_url) if provider in OPENAI_STYLE_PROVIDERS else body.base_url.strip(),
-    }
-    row.updated_at = datetime.now(timezone.utc)
-    session.add(row)
+    model = body.model.strip() or spec.default_model
+    base_url = body.base_url.strip() or spec.default_base_url
+    cfg = {"provider": provider, "model": model, "base_url": base_url}
+
+    if not prof_row:
+        prof_row = IntegrationSetting(kind=prof_key)
+    prof_row.enabled = body.enabled
+    prof_row.encrypted_secret = secret
+    prof_row.config_json = cfg
+    prof_row.updated_at = datetime.now(timezone.utc)
+    session.add(prof_row)
+
+    if body.activate:
+        if not active_row:
+            active_row = IntegrationSetting(kind=active_key)
+        active_row.enabled = body.enabled
+        active_row.encrypted_secret = secret
+        active_row.config_json = cfg
+        active_row.updated_at = datetime.now(timezone.utc)
+        session.add(active_row)
+
     session.commit()
     return _read_ai_status(session, user)
+
+
+@router.post("/ai/activate")
+def activate_ai_provider(
+    body: AiActivateRequest,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
+    provider = body.provider.strip().lower()
+    if provider not in PROVIDER_SPECS:
+        raise HTTPException(400, f"Неизвестный AI-провайдер: {provider}")
+    prof_row = session.get(IntegrationSetting, _profile_key(user, provider))
+    if not prof_row or not prof_row.enabled:
+        raise HTTPException(404, f"Сохранённый профиль для {provider} не найден")
+
+    active_key = _integ_key(user, "ai")
+    active_row = session.get(IntegrationSetting, active_key)
+    if not active_row:
+        active_row = IntegrationSetting(kind=active_key)
+    active_row.enabled = True
+    active_row.encrypted_secret = prof_row.encrypted_secret
+    active_row.config_json = dict(prof_row.config_json or {"provider": provider})
+    active_row.updated_at = datetime.now(timezone.utc)
+    session.add(active_row)
+    session.commit()
+    return _read_ai_status(session, user)
+
+
+def _resolve_test_params(
+    session: Session,
+    user: Optional[User],
+    provider_raw: str,
+    model_raw: str,
+    base_url_raw: str,
+    api_key_raw: str,
+) -> tuple[str, str, str, str]:
+    status = _read_ai_status(session, user)
+    settings = get_settings()
+    provider = (provider_raw or status["provider"] or "gemini").strip().lower()
+    spec = PROVIDER_SPECS.get(provider)
+    prof_row = session.get(IntegrationSetting, _profile_key(user, provider))
+    active_row = _get_integ_row(session, user, "ai")
+
+    prof_cfg = (prof_row.config_json or {}) if prof_row else {}
+    model = (
+        model_raw.strip()
+        or str(prof_cfg.get("model") or "")
+        or (status["model"] if provider == status["provider"] else "")
+        or (spec.default_model if spec else "")
+    )
+    base_url = (
+        base_url_raw.strip()
+        or str(prof_cfg.get("base_url") or "")
+        or (status["base_url"] if provider == status["provider"] else "")
+        or (spec.default_base_url if spec else "")
+    )
+
+    key = api_key_raw.strip()
+    if not key:
+        key = _decrypt_row_secret(prof_row)
+    if not key and active_row and (active_row.config_json or {}).get("provider") == provider:
+        key = _decrypt_row_secret(active_row)
+    if not key and provider == (settings.llm_provider or "gemini").strip().lower():
+        key = (settings.llm_api_key or os.getenv("GEMINI_API_KEY", "")).strip()
+    return provider, model, base_url, key
+
+
+@router.post("/ai/models")
+async def discover_ai_models(
+    body: AiModelsRequest,
+    session: Session = Depends(get_session),
+    user: Optional[User] = Depends(get_current_user),
+):
+    provider, _, base_url, key = _resolve_test_params(
+        session, user, body.provider, "", body.base_url, body.api_key
+    )
+    try:
+        adapter = provider_manager.get_adapter(provider)
+        models = await adapter.list_models(key, base_url)
+        return {"ok": True, "provider": provider, "models": models, "detail": f"Найдено моделей: {len(models)}"}
+    except Exception as exc:
+        return {"ok": False, "provider": provider, "models": [], "detail": redact_text(str(exc), [key] if key else None)}
 
 
 @router.post("/ai/test")
@@ -209,79 +389,40 @@ async def test_ai_integration(
     session: Session = Depends(get_session),
     user: Optional[User] = Depends(get_current_user),
 ):
-    status = _read_ai_status(session, user)
-    row = _get_integ_row(session, user, "ai")
-    settings = get_settings()
-
-    provider = (body.provider or status["provider"] or "gemini").strip().lower()
-    model = (body.model or status["model"] or "gemini-2.5-flash").strip()
-    base_url = (body.base_url or status["base_url"] or settings.llm_base_url).strip()
-
-    key = body.api_key.strip()
-    if not key and row and row.encrypted_secret:
-        try:
-            key = decrypt(row.encrypted_secret).strip()
-        except Exception:
-            key = ""
-    if not key:
-        key = (settings.llm_api_key or os.getenv("GEMINI_API_KEY", "")).strip()
-
-    if provider == "gemini":
-        if not key:
-            return {"ok": False, "detail": "AI API-ключ не задан."}
-        try:
-            async with httpx.AsyncClient(timeout=12.0) as client:
-                resp = await client.get(
-                    "https://generativelanguage.googleapis.com/v1beta/models",
-                    headers={"x-goog-api-key": key},
-                    params={"pageSize": 100},
-                )
-            if resp.status_code == 200:
-                models = resp.json().get("models") or []
-                gen_models = {
-                    str(m.get("name", "")).removeprefix("models/").strip()
-                    for m in models
-                    if isinstance(m, dict) and "generateContent" in (m.get("supportedGenerationMethods") or [])
-                }
-                if model and model not in gen_models:
-                    return {
-                        "ok": False,
-                        "provider": provider,
-                        "model": model,
-                        "detail": f"API-ключ действителен, но модель '{model}' недоступна для generateContent.",
-                    }
-                return {"ok": True, "provider": provider, "model": model, "detail": "Подключение к Gemini API и доступность модели подтверждены."}
-            if resp.status_code in (400, 401, 403):
-                return {
-                    "ok": False,
-                    "provider": provider,
-                    "model": model,
-                    "detail": f"Неверный API-ключ Gemini или доступ запрещён (HTTP {resp.status_code}).",
-                }
-            return {
-                "ok": False,
-                "provider": provider,
-                "model": model,
-                "detail": redact_text(f"Gemini API вернул HTTP {resp.status_code}", [key]),
-            }
-        except Exception as exc:
-            return {"ok": False, "provider": provider, "model": model, "detail": redact_text(str(exc), [key])}
-
-    # ollama / vllm / openai_compatible
-    target_base = resolve_base_url(provider, base_url)
-    res = await verify_openai_compatible_connection(target_base, model=model, api_key=key)
+    provider, model, base_url, key = _resolve_test_params(
+        session, user, body.provider, body.model, body.base_url, body.api_key
+    )
+    try:
+        adapter = provider_manager.get_adapter(provider)
+    except ValueError as exc:
+        return {"ok": False, "provider": provider, "model": model, "models": [], "detail": str(exc)}
+    res = await adapter.test_connection(key, model, base_url)
     return {"provider": provider, "model": model, **res}
 
 
 @router.delete("/ai")
 def delete_ai_integration(
+    provider: str = Query(default="", description="Optional provider id to delete"),
     session: Session = Depends(get_session),
     user: Optional[User] = Depends(get_current_user),
 ):
-    row = session.get(IntegrationSetting, _integ_key(user, "ai"))
-    if row:
-        session.delete(row)
-        session.commit()
+    pid = provider.strip().lower()
+    active_row = session.get(IntegrationSetting, _integ_key(user, "ai"))
+    if pid:
+        prof_row = session.get(IntegrationSetting, _profile_key(user, pid))
+        if prof_row:
+            session.delete(prof_row)
+        if active_row and (active_row.config_json or {}).get("provider") == pid:
+            session.delete(active_row)
+    else:
+        if active_row:
+            active_pid = str((active_row.config_json or {}).get("provider") or "").strip().lower()
+            session.delete(active_row)
+            if active_pid:
+                prof_row = session.get(IntegrationSetting, _profile_key(user, active_pid))
+                if prof_row:
+                    session.delete(prof_row)
+    session.commit()
     return {"ok": True}
 
 

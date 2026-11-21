@@ -111,6 +111,7 @@ export type AiExplainItem = {
   finding_ref: number;
   explanation: string;
   risk?: string | null;
+  priority?: string | null;
   fix_steps: string[];
 };
 
@@ -124,6 +125,9 @@ export type AiReportDto = {
     dropped_cve?: number;
     mode?: string;
     ai_status?: string;
+    provider?: string;
+    provider_label?: string;
+    model?: string;
     error?: string | null;
     fallback_reason?: string | null;
     errors?: string[];
@@ -135,9 +139,38 @@ export type AiIntegrationDto = {
   enabled: boolean;
   source: string;
   provider: string;
+  provider_label?: string;
   model: string;
   base_url: string;
   api_key_preview: string;
+};
+
+export type AiProviderSpecDto = {
+  id: string;
+  label: string;
+  adapter_kind: string;
+  auth_type: string;
+  default_base_url: string;
+  default_model: string;
+  supports_model_discovery: boolean;
+  requires_url_input: boolean;
+  key_hint: string;
+};
+
+export type SavedAiProfileDto = {
+  provider: string;
+  label: string;
+  model: string;
+  base_url: string;
+  configured: boolean;
+  is_active: boolean;
+  api_key_preview: string;
+};
+
+export type AiProvidersResponseDto = {
+  providers: AiProviderSpecDto[];
+  profiles: SavedAiProfileDto[];
+  active: AiIntegrationDto;
 };
 
 export type TelegramIntegrationDto = {
@@ -160,6 +193,7 @@ export type IntegrationTestResult = {
   ok: boolean;
   detail?: string | null;
   error?: string | null;
+  models?: string[];
   bot_username?: string;
   chat_title?: string;
 };

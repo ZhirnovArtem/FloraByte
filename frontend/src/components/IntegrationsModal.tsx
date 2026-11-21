@@ -1,6 +1,108 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import * as api from '../api/client';
-import type { IntegrationsDto } from '../types/workflow';
+import type { AiProviderSpecDto, IntegrationsDto, SavedAiProfileDto } from '../types/workflow';
+
+const FALLBACK_PROVIDER_SPECS: AiProviderSpecDto[] = [
+  {
+    id: 'gemini',
+    label: 'Google Gemini',
+    adapter_kind: 'gemini',
+    auth_type: 'api_key',
+    default_base_url: 'https://generativelanguage.googleapis.com/v1beta',
+    default_model: 'gemini-2.5-flash',
+    supports_model_discovery: true,
+    requires_url_input: false,
+    key_hint: 'Google AI Studio API Key (AIza...)',
+  },
+  {
+    id: 'gigachat',
+    label: 'Sber GigaChat',
+    adapter_kind: 'gigachat',
+    auth_type: 'oauth2_basic',
+    default_base_url: 'https://gigachat.devices.sberbank.ru/api/v1',
+    default_model: 'GigaChat',
+    supports_model_discovery: true,
+    requires_url_input: true,
+    key_hint: 'Authorization key (Base64) или client_id:client_secret',
+  },
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    adapter_kind: 'openai_compatible',
+    auth_type: 'api_key',
+    default_base_url: 'https://api.openai.com/v1',
+    default_model: 'gpt-4o-mini',
+    supports_model_discovery: true,
+    requires_url_input: false,
+    key_hint: 'OpenAI API Key (sk-...)',
+  },
+  {
+    id: 'anthropic',
+    label: 'Anthropic Claude',
+    adapter_kind: 'anthropic',
+    auth_type: 'api_key',
+    default_base_url: 'https://api.anthropic.com/v1',
+    default_model: 'claude-3-5-haiku-latest',
+    supports_model_discovery: true,
+    requires_url_input: false,
+    key_hint: 'Anthropic API Key (sk-ant-...)',
+  },
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    adapter_kind: 'openai_compatible',
+    auth_type: 'api_key',
+    default_base_url: 'https://api.deepseek.com/v1',
+    default_model: 'deepseek-chat',
+    supports_model_discovery: true,
+    requires_url_input: false,
+    key_hint: 'DeepSeek API Key (sk-...)',
+  },
+  {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    adapter_kind: 'openai_compatible',
+    auth_type: 'api_key',
+    default_base_url: 'https://openrouter.ai/api/v1',
+    default_model: 'openai/gpt-4o-mini',
+    supports_model_discovery: true,
+    requires_url_input: false,
+    key_hint: 'OpenRouter API Key (sk-or-...)',
+  },
+  {
+    id: 'ollama',
+    label: 'Ollama (локальная / закрытый контур)',
+    adapter_kind: 'openai_compatible',
+    auth_type: 'optional_key',
+    default_base_url: 'http://localhost:11434/v1',
+    default_model: 'llama3.2',
+    supports_model_discovery: true,
+    requires_url_input: true,
+    key_hint: 'Необязателен для локального сервера',
+  },
+  {
+    id: 'vllm',
+    label: 'vLLM (локальная / закрытый контур)',
+    adapter_kind: 'openai_compatible',
+    auth_type: 'optional_key',
+    default_base_url: 'http://localhost:8000/v1',
+    default_model: 'Qwen/Qwen2.5-7B-Instruct',
+    supports_model_discovery: true,
+    requires_url_input: true,
+    key_hint: 'Необязателен для закрытого контура',
+  },
+  {
+    id: 'openai_compatible',
+    label: 'Другой OpenAI-compatible API',
+    adapter_kind: 'openai_compatible',
+    auth_type: 'optional_key',
+    default_base_url: '',
+    default_model: '',
+    supports_model_discovery: true,
+    requires_url_input: true,
+    key_hint: 'API-ключ (обязателен для удалённых сервисов)',
+  },
+];
 
 type IntegrationsModalProps = {
   integrations: IntegrationsDto;
@@ -13,11 +115,14 @@ export default function IntegrationsModal({
   onClose,
   onUpdated,
 }: IntegrationsModalProps) {
-  // AI state
+  // AI Universal Provider state
+  const [specs, setSpecs] = useState<AiProviderSpecDto[]>(FALLBACK_PROVIDER_SPECS);
+  const [profiles, setProfiles] = useState<SavedAiProfileDto[]>([]);
   const [provider, setProvider] = useState(integrations.ai.provider || 'gemini');
   const [model, setModel] = useState(integrations.ai.model || 'gemini-2.5-flash');
   const [baseUrl, setBaseUrl] = useState(integrations.ai.base_url || '');
   const [apiKey, setApiKey] = useState('');
+  const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
   const [aiStatusMsg, setAiStatusMsg] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
 
@@ -27,6 +132,78 @@ export default function IntegrationsModal({
   const [autoSend, setAutoSend] = useState(integrations.telegram.auto_send);
   const [tgStatusMsg, setTgStatusMsg] = useState('');
   const [tgBusy, setTgBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.getAiProviders();
+        if (cancelled) return;
+        if (res.providers.length > 0) setSpecs(res.providers);
+        setProfiles(res.profiles);
+      } catch {
+        // keep fallback specs
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const currentSpec = specs.find((s) => s.id === provider) ?? specs[0];
+  const savedProfileForProvider = profiles.find((p) => p.provider === provider);
+  const activeKeyPreview =
+    savedProfileForProvider?.api_key_preview ||
+    (provider === integrations.ai.provider ? integrations.ai.api_key_preview : '');
+
+  const refreshProviders = async () => {
+    const res = await api.getAiProviders().catch(() => null);
+    if (res) {
+      if (res.providers.length > 0) setSpecs(res.providers);
+      setProfiles(res.profiles);
+    }
+  };
+
+  const handleProviderSelect = (nextId: string) => {
+    setProvider(nextId);
+    setDiscoveredModels([]);
+    setApiKey('');
+    setAiStatusMsg('');
+    const saved = profiles.find((p) => p.provider === nextId);
+    const nextSpec = specs.find((s) => s.id === nextId);
+    if (saved) {
+      setModel(saved.model);
+      setBaseUrl(saved.base_url);
+    } else if (nextSpec) {
+      setModel(nextSpec.default_model);
+      setBaseUrl(nextSpec.default_base_url);
+    }
+  };
+
+  const handleDiscoverModels = async () => {
+    setAiBusy(true);
+    setAiStatusMsg('Запрос списка моделей…');
+    try {
+      const res = await api.discoverAiModels({
+        provider,
+        base_url: baseUrl,
+        api_key: apiKey.trim(),
+      });
+      if (res.ok) {
+        setDiscoveredModels(res.models);
+        if (res.models.length > 0 && !res.models.includes(model)) {
+          setModel(res.models[0]);
+        }
+        setAiStatusMsg(`✅ ${res.detail || `Найдено моделей: ${res.models.length}`}`);
+      } else {
+        setAiStatusMsg(`❌ ${res.detail || 'Не удалось получить список моделей'}`);
+      }
+    } catch (err) {
+      setAiStatusMsg(`❌ ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setAiBusy(false);
+    }
+  };
 
   const handleTestAi = async () => {
     setAiBusy(true);
@@ -38,6 +215,9 @@ export default function IntegrationsModal({
         base_url: baseUrl,
         api_key: apiKey.trim(),
       });
+      if (res.models && res.models.length > 0) {
+        setDiscoveredModels(res.models);
+      }
       setAiStatusMsg(res.ok ? `✅ ${res.detail || 'Подключено'}` : `❌ ${res.detail || 'Ошибка подключения'}`);
     } catch (err) {
       setAiStatusMsg(`❌ ${err instanceof Error ? err.message : String(err)}`);
@@ -48,7 +228,7 @@ export default function IntegrationsModal({
 
   const handleSaveAi = async () => {
     setAiBusy(true);
-    setAiStatusMsg('Сохранение AI-интеграции…');
+    setAiStatusMsg('Сохранение и активация провайдера…');
     try {
       const savedAi = await api.saveAiIntegration({
         provider,
@@ -56,14 +236,35 @@ export default function IntegrationsModal({
         base_url: baseUrl,
         api_key: apiKey.trim(),
         enabled: true,
+        activate: true,
       });
       onUpdated({ ...integrations, ai: savedAi });
       setApiKey('');
+      await refreshProviders();
       setAiStatusMsg(
         savedAi.configured
-          ? `✅ AI настроен (${savedAi.provider} · ${savedAi.model}). При создании сценария блок AI Explain добавляется автоматически.`
+          ? `✅ Активный провайдер: ${savedAi.provider_label || savedAi.provider} (${savedAi.model}). Перезапуск не требуется.`
           : 'Сохранено, но API-ключ не задан.',
       );
+    } catch (err) {
+      setAiStatusMsg(`❌ ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const handleActivateProfile = async (pid: string) => {
+    setAiBusy(true);
+    setAiStatusMsg(`Переключение на ${pid}…`);
+    try {
+      const nextAi = await api.activateAiProvider(pid);
+      onUpdated({ ...integrations, ai: nextAi });
+      setProvider(nextAi.provider);
+      setModel(nextAi.model);
+      setBaseUrl(nextAi.base_url);
+      setApiKey('');
+      await refreshProviders();
+      setAiStatusMsg(`✅ Активна нейросеть ${nextAi.provider_label || nextAi.provider} (${nextAi.model}).`);
     } catch (err) {
       setAiStatusMsg(`❌ ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -74,11 +275,12 @@ export default function IntegrationsModal({
   const handleDeleteAi = async () => {
     setAiBusy(true);
     try {
-      await api.deleteAiIntegration();
+      await api.deleteAiIntegration(provider);
       const refreshed = await api.getIntegrations();
       onUpdated(refreshed);
+      await refreshProviders();
       setApiKey('');
-      setAiStatusMsg('AI-интеграция отключена.');
+      setAiStatusMsg(`Профиль ${provider} удалён.`);
     } finally {
       setAiBusy(false);
     }
@@ -163,7 +365,7 @@ export default function IntegrationsModal({
       <div
         style={{
           width: '100%',
-          maxWidth: 760,
+          maxWidth: 860,
           maxHeight: '90vh',
           overflowY: 'auto',
           background: '#ffffff',
@@ -174,9 +376,9 @@ export default function IntegrationsModal({
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 18 }}>Настройки интеграций (1 раз для всех сценариев)</h2>
+            <h2 style={{ margin: 0, fontSize: 18 }}>Настройки → Искусственный интеллект и Интеграции</h2>
             <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
-              Ключи шифруются на backend (Fernet) и автоматически подключаются при создании сценария.
+              Универсальное подключение нейросетей и Telegram (шифрование Fernet, переключение без перезапуска сервера).
             </div>
           </div>
           <button
@@ -195,11 +397,11 @@ export default function IntegrationsModal({
           </button>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-          {/* AI Integration */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 0.85fr', gap: 16 }}>
+          {/* Universal AI Provider */}
           <div style={{ border: '1px solid #cbd5e1', borderRadius: 10, padding: 14, background: '#f8fafc' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-              <strong style={{ fontSize: 14 }}>AI Explain (LLM)</strong>
+              <strong style={{ fontSize: 14 }}>Universal AI Provider</strong>
               <span
                 style={{
                   fontSize: 11,
@@ -210,85 +412,138 @@ export default function IntegrationsModal({
                   color: integrations.ai.configured ? '#166534' : '#92400e',
                 }}
               >
-                {integrations.ai.configured ? 'Подключён' : 'Не настроен'}
+                {integrations.ai.configured
+                  ? `Активен: ${integrations.ai.provider_label || integrations.ai.provider}`
+                  : 'AI не настроен'}
               </span>
             </div>
+
+            {profiles.length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>
+                  Сохранённые нейросети (переключение в 1 клик):
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {profiles.map((p) => (
+                    <button
+                      key={p.provider}
+                      type="button"
+                      disabled={aiBusy}
+                      onClick={() => void handleActivateProfile(p.provider)}
+                      style={{
+                        padding: '4px 9px',
+                        borderRadius: 999,
+                        border: p.is_active ? '1px solid #16a34a' : '1px solid #cbd5e1',
+                        background: p.is_active ? '#dcfce7' : '#ffffff',
+                        color: p.is_active ? '#166534' : '#334155',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {p.is_active ? '● ' : ''}
+                      {p.label} ({p.model})
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <label style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>
               <span style={{ fontWeight: 600 }}>Провайдер</span>
               <select
                 value={provider}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  setProvider(next);
-                  if (next === 'ollama') {
-                    if (!baseUrl || baseUrl.includes(':8000') || baseUrl.includes('googleapis')) {
-                      setBaseUrl('http://localhost:11434/v1');
-                    }
-                    if (!model || model.startsWith('gemini') || model.startsWith('Qwen/')) {
-                      setModel('llama3.2');
-                    }
-                  } else if (next === 'vllm') {
-                    if (!baseUrl || baseUrl.includes(':11434') || baseUrl.includes('googleapis')) {
-                      setBaseUrl('http://localhost:8000/v1');
-                    }
-                    if (!model || model.startsWith('gemini') || model === 'llama3.2') {
-                      setModel('Qwen/Qwen2.5-7B-Instruct');
-                    }
-                  } else if (next === 'gemini') {
-                    if (!model || model === 'llama3.2' || model.startsWith('Qwen/')) {
-                      setModel('gemini-2.5-flash');
-                    }
-                  }
-                }}
+                onChange={(e) => handleProviderSelect(e.target.value)}
                 style={{ width: '100%', padding: '6px 8px', marginTop: 4, borderRadius: 6, border: '1px solid #cbd5e1' }}
               >
-                <option value="gemini">Google Gemini (облако)</option>
-                <option value="ollama">Ollama (локальная / закрытый контур)</option>
-                <option value="vllm">vLLM (локальная / закрытый контур)</option>
-                <option value="openai_compatible">OpenAI-compatible API</option>
+                {specs.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
               </select>
             </label>
 
             <label style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>
-              <span style={{ fontWeight: 600 }}>Модель</span>
-              <input
-                type="text"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={provider === 'ollama' ? 'llama3.2' : provider === 'vllm' ? 'Qwen/Qwen2.5-7B-Instruct' : 'gemini-2.5-flash'}
-                style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', marginTop: 4, borderRadius: 6, border: '1px solid #cbd5e1' }}
-              />
-            </label>
-
-            {provider !== 'gemini' && (
-              <label style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>
-                <span style={{ fontWeight: 600 }}>Base URL (закрытый контур / localhost)</span>
-                <input
-                  type="text"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder={provider === 'vllm' ? 'http://localhost:8000/v1' : 'http://localhost:11434/v1'}
-                  style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', marginTop: 4, borderRadius: 6, border: '1px solid #cbd5e1' }}
-                />
-                <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
-                  Для локальных Ollama/vLLM в закрытом контуре API-ключ не обязателен.
-                </div>
-              </label>
-            )}
-
-            <label style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>
               <span style={{ fontWeight: 600 }}>
-                API-ключ {integrations.ai.api_key_preview ? `(текущий: ${integrations.ai.api_key_preview})` : ''}
+                API Key {activeKeyPreview ? `(сохранён: ${activeKeyPreview})` : ''}
               </span>
               <input
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder={integrations.ai.configured ? 'Оставьте пустым, чтобы сохранить текущий' : 'Вставьте API-ключ'}
+                placeholder={
+                  activeKeyPreview
+                    ? 'Оставьте пустым, чтобы сохранить текущий ключ'
+                    : currentSpec?.key_hint || 'Введите API-ключ'
+                }
                 style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', marginTop: 4, borderRadius: 6, border: '1px solid #cbd5e1' }}
               />
             </label>
+
+            <div style={{ fontSize: 12, marginBottom: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 600 }}>Модель</span>
+                {currentSpec?.supports_model_discovery && (
+                  <button
+                    type="button"
+                    disabled={aiBusy}
+                    onClick={() => void handleDiscoverModels()}
+                    style={{
+                      padding: '2px 8px',
+                      borderRadius: 5,
+                      border: '1px solid #cbd5e1',
+                      background: '#ffffff',
+                      fontSize: 11,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Определить модели
+                  </button>
+                )}
+              </div>
+              {discoveredModels.length > 0 && (
+                <select
+                  value={discoveredModels.includes(model) ? model : ''}
+                  onChange={(e) => {
+                    if (e.target.value) setModel(e.target.value);
+                  }}
+                  style={{ width: '100%', padding: '6px 8px', marginTop: 4, borderRadius: 6, border: '1px solid #cbd5e1' }}
+                >
+                  <option value="">Выберите из найденных ({discoveredModels.length}) или введите вручную…</option>
+                  {discoveredModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <input
+                type="text"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={currentSpec?.default_model || 'Название модели'}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', marginTop: 4, borderRadius: 6, border: '1px solid #cbd5e1' }}
+              />
+            </div>
+
+            {(currentSpec?.requires_url_input || baseUrl) && (
+              <label style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>
+                <span style={{ fontWeight: 600 }}>API URL</span>
+                <input
+                  type="text"
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  placeholder={currentSpec?.default_base_url || 'https://.../v1'}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', marginTop: 4, borderRadius: 6, border: '1px solid #cbd5e1' }}
+                />
+                {(provider === 'ollama' || provider === 'vllm') && (
+                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
+                    Для локальных моделей укажите URL, доступный Backend-серверу (в закрытом контуре или туннеле). Ключ необязателен.
+                  </div>
+                )}
+              </label>
+            )}
 
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
               <button
@@ -297,24 +552,24 @@ export default function IntegrationsModal({
                 onClick={() => void handleTestAi()}
                 style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', fontSize: 12, cursor: 'pointer' }}
               >
-                Проверить
+                Проверить подключение
               </button>
               <button
                 type="button"
                 disabled={aiBusy}
                 onClick={() => void handleSaveAi()}
-                style={{ padding: '6px 10px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: '#2563eb', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
               >
-                Сохранить AI
+                Сохранить и использовать
               </button>
-              {integrations.ai.configured && (
+              {(savedProfileForProvider || integrations.ai.configured) && (
                 <button
                   type="button"
                   disabled={aiBusy}
                   onClick={() => void handleDeleteAi()}
                   style={{ padding: '6px 10px', borderRadius: 6, border: 'none', background: '#fee2e2', color: '#991b1b', fontSize: 12, cursor: 'pointer' }}
                 >
-                  Отключить
+                  Удалить ключ
                 </button>
               )}
             </div>

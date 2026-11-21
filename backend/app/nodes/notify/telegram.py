@@ -217,7 +217,8 @@ def _format_message(report: dict[str, Any] | None, run_id: str) -> str:
     ai_items = (report.get("items") or []) if confirmed_ai else []
 
     if confirmed_ai and report.get("summary"):
-        lines.extend(["", f"Заключение AI: {str(report['summary'])[:450]}"])
+        prov_label = val.get("provider_label") or val.get("provider") or "AI"
+        lines.extend(["", f"Заключение AI ({prov_label}): {str(report['summary'])[:450]}"])
     elif val.get("mode") == "error":
         lines.extend(["", "AI-анализ: Ошибка — AI-анализ не выполнен. Проверьте API-ключ и доступность модели."])
 
@@ -229,10 +230,13 @@ def _format_message(report: dict[str, Any] | None, run_id: str) -> str:
             ref = item.get("finding_ref", "?")
             explanation = str(item.get("explanation") or "").replace("`", "'")
             risk = str(item.get("risk") or "").replace("`", "'")
+            prio = str(item.get("priority") or "").strip()
             steps = item.get("fix_steps") or []
             lines.append(f"• Находка #{ref}: {explanation[:180]}")
             if risk:
                 lines.append(f"  Последствия: {risk[:140]}")
+            if prio:
+                lines.append(f"  Приоритет: {prio}")
             if steps:
                 lines.append(f"  Исправление: {str(steps[0])[:240]}")
 

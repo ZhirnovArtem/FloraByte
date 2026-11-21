@@ -58,7 +58,8 @@ def render_markdown(findings: list[Finding], ai_report: dict[str, Any] | None = 
         val = ai_report.get("validation") or {}
         mode = val.get("mode")
         if confirmed_ai:
-            lines.append("**AI-анализ:** Успешно — Gemini успешно обработал результаты сканирования.")
+            provider_label = str(val.get("provider_label") or "AI-провайдер")
+            lines.append(f"**AI-анализ:** Успешно — {provider_label} успешно обработал результаты сканирования.")
             if ai_report.get("summary"):
                 lines.append(f"**Общее заключение:** {ai_report['summary']}")
         elif mode == "empty":
@@ -115,6 +116,8 @@ def render_markdown(findings: list[Finding], ai_report: dict[str, Any] | None = 
                 lines.append(f"**AI-объяснение:** {ai_item['explanation']}")
             if ai_item.get("risk"):
                 lines.append(f"**Возможные последствия:** {ai_item['risk']}")
+            if ai_item.get("priority"):
+                lines.append(f"**Приоритет исправления:** {ai_item['priority']}")
             steps = ai_item.get("fix_steps") or []
             if steps:
                 lines.append("**Пошаговые рекомендации:**")

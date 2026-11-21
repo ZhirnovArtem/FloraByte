@@ -14,6 +14,7 @@ class ExplainItem(BaseModel):
     finding_ref: int
     explanation: str
     risk: str | None = None
+    priority: str | None = None
     fix_steps: list[str] = Field(default_factory=list)
 
 

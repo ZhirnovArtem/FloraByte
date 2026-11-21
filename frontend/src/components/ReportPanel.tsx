@@ -526,7 +526,9 @@ export default function ReportPanel({
                       }}
                     >
                       <span>
-                        <strong>AI-анализ: Успешно</strong> — Gemini успешно обработал результаты сканирования.
+                        <strong>AI-анализ: Успешно</strong> —{' '}
+                        {val?.provider_label || 'Gemini'} успешно обработал результаты сканирования
+                        {val?.model ? ` (${val.model})` : ''}.
                       </span>
                       <span style={{ fontSize: 11, fontWeight: 700 }}>
                         passed={String(val?.passed)} · dropped_cve={val?.dropped_cve ?? 0}
@@ -577,6 +579,7 @@ export default function ReportPanel({
                           {item.risk && (
                             <div style={{ marginTop: 4, color: '#9a3412' }}>
                               <strong>Возможные последствия:</strong> {item.risk}
+                              {item.priority ? ` (Приоритет: ${item.priority})` : ''}
                             </div>
                           )}
                           {item.fix_steps?.length > 0 && (

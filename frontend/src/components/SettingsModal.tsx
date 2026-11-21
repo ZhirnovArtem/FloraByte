@@ -97,10 +97,15 @@ export default function SettingsModal({
             }}
           >
             <div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>Интеграции (AI и Telegram)</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>
+                Искусственный интеллект и Интеграции
+              </div>
               <div style={{ fontSize: 12, color: '#475569', marginTop: 3 }}>
-                AI: {integrations.ai.configured ? `${integrations.ai.provider} ✓` : 'не настроен'} · Telegram:{' '}
-                {integrations.telegram.configured ? `chat ${integrations.telegram.chat_id} ✓` : 'не настроен'}
+                AI:{' '}
+                {integrations.ai.configured
+                  ? `${integrations.ai.provider_label || integrations.ai.provider} (${integrations.ai.model}) ✓`
+                  : 'не настроен'}{' '}
+                · Telegram: {integrations.telegram.configured ? `chat ${integrations.telegram.chat_id} ✓` : 'не настроен'}
               </div>
             </div>
             <button
@@ -121,7 +126,7 @@ export default function SettingsModal({
                 whiteSpace: 'nowrap',
               }}
             >
-              Интеграции →
+              Настроить ИИ и интеграции →
             </button>
           </div>
 

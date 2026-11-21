@@ -59,7 +59,9 @@ def _build_lines(run_id: str, status: str, findings: list[dict], ai_report: dict
         for wrapped in textwrap.wrap(str(ai_report.get("summary")), width=90):
             lines.append((wrapped, False))
         ai_status = val.get("ai_status") or "Успешно"
-        lines.append((f"AI Status: {ai_status} (mode={val.get('mode', 'llm')} passed={val.get('passed')})", False))
+        prov_label = val.get("provider_label") or val.get("provider") or "AI"
+        model_label = f" ({val['model']})" if val.get("model") else ""
+        lines.append((f"AI Provider: {prov_label}{model_label} | Status: {ai_status} (mode={val.get('mode', 'llm')} passed={val.get('passed')})", False))
         lines.append(("", False))
     elif ai_report and val.get("mode") == "error":
         lines.append(("AI Analysis Error", True))
@@ -99,6 +101,9 @@ def _build_lines(run_id: str, status: str, findings: list[dict], ai_report: dict
                         lines.append((w, False))
                 if ai_item.get("risk"):
                     for w in textwrap.wrap(f"   Impact / Risk: {ai_item['risk']}", width=92):
+                        lines.append((w, False))
+                if ai_item.get("priority"):
+                    for w in textwrap.wrap(f"   Priority: {ai_item['priority']}", width=92):
                         lines.append((w, False))
                 for step in ai_item.get("fix_steps") or []:
                     for w in textwrap.wrap(f"   Fix: {step}", width=92):

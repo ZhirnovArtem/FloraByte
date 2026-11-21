@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any
+from typing import Any, Optional
 
-import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from app.core.auth import get_optional_user
+from app.core.models import User
+from app.nodes.ai.providers import provider_manager
 from app.nodes.registry import list_node_types
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -174,40 +176,42 @@ def _deterministic_workflow_from_prompt(prompt: str) -> dict[str, Any]:
     return {"nodes": nodes, "edges": edges}
 
 
-async def _try_llm_generate(prompt: str) -> dict[str, Any] | None:
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("LLM_API_KEY")
-    if not api_key:
+async def _try_llm_generate(prompt: str, owner_id: str | None = None) -> dict[str, Any] | None:
+    provider, api_key, model, base_url = provider_manager.resolve_runtime_config(owner_id=owner_id)
+    try:
+        adapter = provider_manager.get_adapter(provider)
+        adapter.validate_config(api_key, model, base_url)
+    except Exception:
         return None
     node_types = [s["type"] for s in list_node_types()]
     sys_msg = (
         "Generate a valid security workflow DAG JSON with keys 'nodes' and 'edges'. "
         f"Allowed node types ONLY: {node_types}. Return raw JSON only."
     )
-    provider = os.environ.get("LLM_PROVIDER", "gemini").lower()
-    if provider == "gemini":
-        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        payload = {"contents": [{"parts": [{"text": f"{sys_msg}\nUser request: {prompt}"}]}]}
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                r = await client.post(url, json=payload)
-            if r.status_code != 200:
-                return None
-            raw_text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-            if not match:
-                return None
-            parsed = json.loads(match.group(0))
-            return _validate_generated_graph(parsed)
-        except Exception:
+    try:
+        raw_text = await adapter.generate_text(
+            system_prompt=sys_msg,
+            user_prompt=f"User request: {prompt}",
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+        )
+        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+        if not match:
             return None
-    return None
+        parsed = json.loads(match.group(0))
+        return _validate_generated_graph(parsed)
+    except Exception:
+        return None
 
 
 @router.post("/generate-workflow")
-async def generate_workflow(req: GenerateWorkflowRequest):
+async def generate_workflow(
+    req: GenerateWorkflowRequest,
+    user: Optional[User] = Depends(get_optional_user),
+):
     """Generate a validated workflow graph from a natural-language prompt."""
-    llm_graph = await _try_llm_generate(req.prompt)
+    llm_graph = await _try_llm_generate(req.prompt, owner_id=user.id if user else None)
     if llm_graph is not None:
         return {
             "name": "AI Generated Workflow",

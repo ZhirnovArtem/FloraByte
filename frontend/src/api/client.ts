@@ -1,5 +1,6 @@
 import type {
   AiIntegrationDto,
+  AiProvidersResponseDto,
   AuthStatusDto,
   BackendGraph,
   CredentialDto,
@@ -284,12 +285,40 @@ export async function getIntegrations(): Promise<IntegrationsDto> {
   return requestJson<IntegrationsDto>('/api/integrations');
 }
 
+export async function getAiProviders(): Promise<AiProvidersResponseDto> {
+  return requestJson<AiProvidersResponseDto>('/api/integrations/ai/providers');
+}
+
+export async function discoverAiModels(payload: {
+  provider: string;
+  base_url: string;
+  api_key?: string;
+}): Promise<{ ok: boolean; provider: string; models: string[]; detail?: string }> {
+  return requestJson<{ ok: boolean; provider: string; models: string[]; detail?: string }>(
+    '/api/integrations/ai/models',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function activateAiProvider(provider: string): Promise<AiIntegrationDto> {
+  return requestJson<AiIntegrationDto>('/api/integrations/ai/activate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider }),
+  });
+}
+
 export async function saveAiIntegration(payload: {
   provider: string;
   model: string;
   base_url: string;
   api_key?: string;
   enabled?: boolean;
+  activate?: boolean;
 }): Promise<AiIntegrationDto> {
   return requestJson<AiIntegrationDto>('/api/integrations/ai', {
     method: 'PUT',
@@ -311,8 +340,9 @@ export async function testAiIntegration(payload: {
   });
 }
 
-export async function deleteAiIntegration(): Promise<void> {
-  await requestJson<{ ok: boolean }>('/api/integrations/ai', { method: 'DELETE' });
+export async function deleteAiIntegration(provider?: string): Promise<void> {
+  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : '';
+  await requestJson<{ ok: boolean }>(`/api/integrations/ai${qs}`, { method: 'DELETE' });
 }
 
 export async function saveTelegramIntegration(payload: {
