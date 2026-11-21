@@ -27,6 +27,8 @@ htmlcov/
 
 # База данных и runtime
 *.db
+*.db-journal
+*.db-wal
 *.sqlite
 *.sqlite3
 runs/
@@ -40,7 +42,8 @@ runs/
 **/.env.*
 !**/.env.example
 APP_SECRET_KEY
-secrets/
+/secrets/
+*.key
 *.pem
 
 # Логи и IDE

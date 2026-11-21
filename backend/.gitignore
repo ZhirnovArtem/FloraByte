@@ -24,7 +24,10 @@ runs/
 *.log
 .idea/
 .vscode/
-secrets/
+/secrets/
 APP_SECRET_KEY
+*.key
 *.pem
+*.db-journal
+*.db-wal
 .coverage.*
