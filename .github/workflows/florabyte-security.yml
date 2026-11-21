@@ -1,0 +1,61 @@
+name: FloraByte Security Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  florabyte-scan:
+    runs-on: ubuntu-latest
+    if: ${{ vars.FLORABYTE_API_URL != '' && vars.FLORABYTE_WORKFLOW_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package repository sources safely
+        run: |
+          git archive --format=zip --output=/tmp/project.zip HEAD
+
+      - name: Upload ZIP to FloraByte
+        id: upload
+        run: |
+          RESP=$(curl -sS -f \
+            -H "X-CI-Token: ${{ secrets.FLORABYTE_CI_TOKEN }}" \
+            -F "file=@/tmp/project.zip" \
+            "${{ vars.FLORABYTE_API_URL }}/api/uploads")
+          UPLOAD_ID=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["upload_id"])' <<< "$RESP")
+          echo "upload_id=$UPLOAD_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger FloraByte CI scan and poll verdict
+        run: |
+          START=$(curl -sS -f \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-CI-Token: ${{ secrets.FLORABYTE_CI_TOKEN }}" \
+            -d "{\"workflow_id\":\"${{ vars.FLORABYTE_WORKFLOW_ID }}\",\"upload_id\":\"${{ steps.upload.outputs.upload_id }}\",\"repository\":\"${{ github.repository }}\",\"commit\":\"${{ github.sha }}\",\"branch\":\"${{ github.ref_name }}\",\"fail_on\":\"CRITICAL\",\"wait\":false}" \
+            "${{ vars.FLORABYTE_API_URL }}/api/ci/run")
+          RUN_ID=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["run_id"])' <<< "$START")
+          echo "FloraByte run_id=$RUN_ID"
+
+          for i in $(seq 1 60); do
+            STATUS_JSON=$(curl -sS -f \
+              -H "X-CI-Token: ${{ secrets.FLORABYTE_CI_TOKEN }}" \
+              "${{ vars.FLORABYTE_API_URL }}/api/ci/runs/${RUN_ID}?fail_on=CRITICAL")
+            ST=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])' <<< "$STATUS_JSON")
+            echo "Poll $i: status=$ST"
+            if [ "$ST" = "success" ] || [ "$ST" = "failed" ] || [ "$ST" = "partial" ]; then
+              break
+            fi
+            sleep 2
+          done
+
+          RESULT=$(curl -sS -f \
+            -H "X-CI-Token: ${{ secrets.FLORABYTE_CI_TOKEN }}" \
+            "${{ vars.FLORABYTE_API_URL }}/api/ci/runs/${RUN_ID}/result?fail_on=CRITICAL")
+          echo "$RESULT" | python3 -m json.tool
+          VERDICT=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["verdict"])' <<< "$RESULT")
+          if [ "$VERDICT" != "PASS" ]; then
+            echo "::error::FloraByte Security Gate returned verdict=$VERDICT"
+            exit 1
+          fi
