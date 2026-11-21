@@ -24,6 +24,9 @@ class ExplainResponse(BaseModel):
 CVE_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.I)
 GHSA_RE = re.compile(r"GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}", re.I)
 TOKENISH = re.compile(r"(?:sk-|ghp_|xox[baprs]-|AIza)[A-Za-z0-9_\-]{10,}")
+SOURCE_LOCATION_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?P<file>(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:kt|kts|java|gradle))(?:[:#](?P<line>\d+))?"
+)
 
 
 def _allowed_advisories(findings: list[dict]) -> set[str]:
@@ -71,14 +74,34 @@ def validate_llm_response(
             continue
 
         f = findings[item.finding_ref]
-        # file/line consistency if model mentioned path — soft check on explanation only for CVE
-        text = item.explanation + " " + " ".join(item.fix_steps)
+        # Verify explicit source locations in explanations against this finding.
+        # Do not reject fix_steps for suggesting a *new* destination file.
+        path = str(f.get("path") or "").replace("\\", "/")
+        source_line = f.get("line")
+        invalid_location = False
+        for location in SOURCE_LOCATION_RE.finditer(item.explanation):
+            mentioned = location.group("file")
+            if mentioned not in (path, path.rsplit("/", 1)[-1]):
+                invalid_location = True
+                break
+            mentioned_line = location.group("line")
+            if mentioned_line and source_line is not None and int(mentioned_line) != source_line:
+                invalid_location = True
+                break
+        if invalid_location:
+            meta["dropped_items"] += 1
+            meta["errors"].append(f"unexpected file/line for finding_ref={item.finding_ref}")
+            continue
+
+        text = item.explanation + " " + (item.risk or "") + " " + " ".join(item.fix_steps)
         # strip invented CVEs
         for m in CVE_RE.findall(text) + GHSA_RE.findall(text):
             if m.upper() not in allowed_adv:
                 meta["dropped_cve"] += 1
                 text = text.replace(m, "[removed-id]")
                 item.explanation = item.explanation.replace(m, "[removed-id]")
+                if item.risk:
+                    item.risk = item.risk.replace(m, "[removed-id]")
                 item.fix_steps = [s.replace(m, "[removed-id]") for s in item.fix_steps]
 
         if TOKENISH.search(text):
@@ -90,6 +113,14 @@ def validate_llm_response(
         kept.append(item)
 
     parsed.items = kept
+    # Summary is also model-generated text: avoid fabricated advisories/credentials.
+    for advisory in CVE_RE.findall(parsed.summary) + GHSA_RE.findall(parsed.summary):
+        if advisory.upper() not in allowed_adv:
+            parsed.summary = parsed.summary.replace(advisory, "[removed-id]")
+            meta["dropped_cve"] += 1
+    if TOKENISH.search(parsed.summary):
+        parsed.summary = "Автоматическое обобщение находок."
+        meta["errors"].append("possible secret leak in summary")
     meta["passed"] = len(meta["errors"]) == 0 or (len(kept) > 0 and meta["dropped_items"] == 0 and meta["dropped_cve"] == 0)
     # softer: pass if we have any kept items and no schema failure
     if kept and not any("schema" in e or "invalid JSON" in e for e in meta["errors"]):

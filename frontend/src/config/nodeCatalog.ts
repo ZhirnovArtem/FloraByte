@@ -1,38 +1,232 @@
+import type { NodeTypeSpec } from '../types/workflow';
 
-export const nodeCatalog = [
+// Запасной каталог на случай недоступности backend GET /api/node-types
+export const fallbackNodeCatalog: NodeTypeSpec[] = [
   {
-    kind: 'start',
-    label: 'Start',
-    description: 'Начало сценария',
+    type: 'trigger.manual',
+    label: 'Manual Trigger',
+    group: 'trigger',
+    inputs: [],
+    outputs: [{ name: 'out', kind: 'Any' }],
+    params_schema: { type: 'object', properties: {} },
   },
   {
-    kind: 'secrets',
+    type: 'trigger.schedule',
+    label: 'Schedule Trigger',
+    group: 'trigger',
+    inputs: [],
+    outputs: [{ name: 'out', kind: 'Any' }],
+    params_schema: {
+      type: 'object',
+      properties: {
+        interval_sec: { type: 'integer', default: 0, description: 'Interval in seconds (0 = use cron)' },
+        cron: { type: 'string', default: '', description: 'Cron expression e.g. "0 */6 * * *"' },
+      },
+    },
+  },
+  {
+    type: 'source.upload_zip',
+    label: 'Upload ZIP',
+    group: 'source',
+    inputs: [{ name: 'in', kind: 'Any' }],
+    outputs: [{ name: 'workspace', kind: 'Workspace' }],
+    params_schema: {
+      type: 'object',
+      properties: {
+        upload_id: { type: 'string', default: '', description: 'ID from POST /api/uploads' },
+        subdir: { type: 'string', default: '', description: 'Optional subdirectory inside archive' },
+      },
+    },
+  },
+  {
+    type: 'source.git_clone',
+    label: 'Git Clone',
+    group: 'source',
+    inputs: [{ name: 'in', kind: 'Any' }],
+    outputs: [{ name: 'workspace', kind: 'Workspace' }],
+    params_schema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', default: 'https://github.com/TBagirov/training' },
+        branch: { type: 'string', default: '' },
+        subdir: { type: 'string', default: '' },
+      },
+    },
+  },
+  {
+    type: 'scanner.secrets',
     label: 'Secrets Scanner',
-    description: 'Поиск паролей и токенов',
+    group: 'scanner',
+    inputs: [{ name: 'workspace', kind: 'Workspace' }],
+    outputs: [{ name: 'findings', kind: 'Findings' }],
+    params_schema: { type: 'object', properties: {} },
   },
   {
-    kind: 'sast',
-    label: 'SAST Scanner',
-    description: 'Анализ исходного кода',
-  },
-  {
-    kind: 'sca',
+    type: 'scanner.sca',
     label: 'SCA Scanner',
-    description: 'Проверка зависимостей',
+    group: 'scanner',
+    inputs: [{ name: 'workspace', kind: 'Workspace' }],
+    outputs: [{ name: 'findings', kind: 'Findings' }],
+    params_schema: {
+      type: 'object',
+      properties: {
+        vuln_db_path: { type: 'string', default: '', description: 'Override path to vulnerabilities.json' },
+        lockfile_priority: { type: 'boolean', default: true },
+      },
+    },
   },
   {
-    kind: 'ai',
-    label: 'AI Analysis',
-    description: 'Объяснение уязвимостей',
+    type: 'scanner.sast',
+    label: 'SAST Scanner',
+    group: 'scanner',
+    inputs: [{ name: 'workspace', kind: 'Workspace' }],
+    outputs: [{ name: 'findings', kind: 'Findings' }],
+    params_schema: {
+      type: 'object',
+      properties: {
+        exclude_tests: { type: 'boolean', default: true },
+      },
+    },
   },
   {
-    kind: 'condition',
-    label: 'Condition',
-    description: 'Проверка условия',
+    type: 'logic.if_else',
+    label: 'If / Else',
+    group: 'logic',
+    inputs: [
+      { name: 'findings', kind: 'Findings' },
+      { name: 'in', kind: 'Any' },
+    ],
+    outputs: [
+      { name: 'true', kind: 'Any' },
+      { name: 'false', kind: 'Any' },
+    ],
+    params_schema: {
+      type: 'object',
+      properties: {
+        left: { type: 'string', default: 'findings.count' },
+        op: { type: 'string', default: '>' },
+        right: { type: 'string', default: '0' },
+      },
+    },
   },
   {
-    kind: 'notification',
-    label: 'Notification',
-    description: 'Отправка уведомления',
+    type: 'logic.compare',
+    label: 'Compare',
+    group: 'logic',
+    inputs: [
+      { name: 'findings', kind: 'Findings' },
+      { name: 'in', kind: 'Any' },
+    ],
+    outputs: [
+      { name: 'true', kind: 'Any' },
+      { name: 'false', kind: 'Any' },
+    ],
+    params_schema: {
+      type: 'object',
+      properties: {
+        left: { type: 'string', default: 'findings.max_severity' },
+        op: { type: 'string', default: '>=' },
+        right: { type: 'string', default: 'HIGH' },
+      },
+    },
+  },
+  {
+    type: 'logic.regex',
+    label: 'Regex Match',
+    group: 'logic',
+    inputs: [
+      { name: 'findings', kind: 'Findings' },
+      { name: 'in', kind: 'Any' },
+    ],
+    outputs: [
+      { name: 'true', kind: 'Any' },
+      { name: 'false', kind: 'Any' },
+    ],
+    params_schema: {
+      type: 'object',
+      properties: {
+        field: { type: 'string', default: 'findings.paths' },
+        pattern: { type: 'string', default: '.*' },
+      },
+    },
+  },
+  {
+    type: 'findings.merge',
+    label: 'Merge Findings',
+    group: 'findings',
+    inputs: [
+      { name: 'a', kind: 'Findings' },
+      { name: 'b', kind: 'Findings' },
+      { name: 'c', kind: 'Findings' },
+      { name: 'findings', kind: 'Findings' },
+      { name: 'in', kind: 'Findings' },
+    ],
+    outputs: [{ name: 'findings', kind: 'Findings' }],
+    params_schema: { type: 'object', properties: {} },
+  },
+  {
+    type: 'findings.export',
+    label: 'Export Report',
+    group: 'findings',
+    inputs: [
+      { name: 'findings', kind: 'Findings' },
+      { name: 'in', kind: 'Findings' },
+      { name: 'a', kind: 'Findings' },
+    ],
+    outputs: [{ name: 'report', kind: 'Report' }],
+    params_schema: { type: 'object', properties: {} },
+  },
+  {
+    type: 'ai.explain',
+    label: 'AI Explain',
+    group: 'ai',
+    inputs: [
+      { name: 'findings', kind: 'Findings' },
+      { name: 'in', kind: 'Findings' },
+    ],
+    outputs: [{ name: 'report', kind: 'Report' }],
+    params_schema: {
+      type: 'object',
+      properties: {
+        credential_id: { type: 'string', default: '' },
+        model: { type: 'string', default: '' },
+        provider: { type: 'string', default: '' },
+      },
+    },
+  },
+  {
+    type: 'notify.telegram',
+    label: 'Telegram',
+    group: 'notify',
+    inputs: [
+      { name: 'report', kind: 'Report' },
+      { name: 'in', kind: 'Any' },
+    ],
+    outputs: [{ name: 'out', kind: 'Any' }],
+    params_schema: {
+      type: 'object',
+      properties: {
+        credential_id: { type: 'string', default: '' },
+        chat_id: { type: 'string', default: '' },
+      },
+    },
+  },
+  {
+    type: 'notify.webhook',
+    label: 'Webhook',
+    group: 'notify',
+    inputs: [
+      { name: 'report', kind: 'Report' },
+      { name: 'in', kind: 'Any' },
+    ],
+    outputs: [{ name: 'out', kind: 'Any' }],
+    params_schema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', default: '' },
+        credential_id: { type: 'string', default: '' },
+        method: { type: 'string', default: 'POST' },
+      },
+    },
   },
 ];

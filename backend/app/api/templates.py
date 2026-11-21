@@ -22,19 +22,26 @@ def _seed_from_files(session: Session) -> None:
     """Load templates/*.json into DB if not already present by name."""
     if not TEMPLATES_DIR.exists():
         return
-    existing = {w.name for w in session.exec(select(Workflow).where(Workflow.is_template == True)).all()}  # noqa: E712
+    existing = {w.name: w for w in session.exec(select(Workflow).where(Workflow.is_template == True)).all()}  # noqa: E712
     for path in TEMPLATES_DIR.glob("*.json"):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
         name = data.get("name") or path.stem
+        graph = data.get("graph") or data.get("graph_json") or {}
         if name in existing:
+            # Repair templates seeded by an older application version.
+            current = existing[name]
+            if current.graph_json != graph:
+                current.graph_json = graph
+                current.description = data.get("description") or ""
+                session.add(current)
             continue
         w = Workflow(
             name=name,
             description=data.get("description") or "",
-            graph_json=data.get("graph") or data.get("graph_json") or {},
+            graph_json=graph,
             is_template=True,
         )
         session.add(w)

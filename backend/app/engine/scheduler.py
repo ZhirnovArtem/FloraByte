@@ -54,6 +54,8 @@ def reload_schedules(session: Session) -> int:
     count = 0
     workflows = session.exec(select(Workflow)).all()
     for w in workflows:
+        if w.is_template:
+            continue
         graph = w.graph_json or {}
         for node_id, params in _extract_schedule_params(graph):
             job_id = f"wf_{w.id}_{node_id}"

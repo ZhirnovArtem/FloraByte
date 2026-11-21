@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+import secrets
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.node_types import router as node_types_router
@@ -46,6 +48,9 @@ async def lifespan(app: FastAPI):
     start_scheduler()
 
     yield
+    from app.engine.scheduler import scheduler
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
 
 
 app = FastAPI(
@@ -56,7 +61,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_settings().cors_origins_list(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -70,6 +75,26 @@ app.include_router(ws_router)
 app.include_router(credentials_router)
 app.include_router(templates_router)
 app.include_router(ci_router)
+
+
+
+
+@app.middleware("http")
+async def protect_workflow_api(request: Request, call_next):
+    """Optional shared-token access for exposed demos, not a multi-user auth system."""
+    path = request.url.path
+    if request.method != "OPTIONS" and path.startswith("/api/") and not path.startswith("/api/ci/"):
+        expected = get_settings().workflow_access_token
+        if expected:
+            supplied = request.headers.get("X-Workflow-Token", "")
+            # CI uploads can authenticate using CI_TOKEN instead of the UI token.
+            ci_secret = __import__("os").environ.get("CI_TOKEN", "") if path == "/api/uploads" else ""
+            ci_supplied = request.headers.get("X-CI-Token", "") if ci_secret else ""
+            if not secrets.compare_digest(supplied, expected) and not (
+                ci_secret and secrets.compare_digest(ci_supplied, ci_secret)
+            ):
+                return JSONResponse({"detail": "Missing/invalid X-Workflow-Token"}, status_code=401)
+    return await call_next(request)
 
 
 @app.get("/health")

@@ -1,0 +1,26 @@
+# Save as .github/workflows/training-security.yml ONLY in a permitted training repository.
+# GitHub secrets: FLORABYTE_URL, FLORABYTE_WORKFLOW_ID, FLORABYTE_CI_TOKEN.
+name: FloraByte training security scan
+on: [push, pull_request]
+jobs:
+  security-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload safe training sources and run gate
+        env:
+          FLORABYTE_URL: ${{ secrets.FLORABYTE_URL }}
+          FLORABYTE_WORKFLOW_ID: ${{ secrets.FLORABYTE_WORKFLOW_ID }}
+          FLORABYTE_CI_TOKEN: ${{ secrets.FLORABYTE_CI_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git archive --format=zip --output=/tmp/florabyte-sources.zip HEAD
+          curl --fail-with-body --silent --show-error \
+            -H "X-CI-Token: $FLORABYTE_CI_TOKEN" \
+            -F "file=@/tmp/florabyte-sources.zip" \
+            "$FLORABYTE_URL/api/uploads" > /tmp/florabyte-upload.json
+          UPLOAD_ID=$(python3 -c 'import json; print(json.load(open("/tmp/florabyte-upload.json"))["upload_id"])')
+          curl --fail-with-body --silent --show-error \
+            -X POST -H "X-CI-Token: $FLORABYTE_CI_TOKEN" \
+            "$FLORABYTE_URL/api/ci/workflows/$FLORABYTE_WORKFLOW_ID/run?upload_id=$UPLOAD_ID&fail_on=CRITICAL"

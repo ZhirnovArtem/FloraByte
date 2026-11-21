@@ -1,29 +1,40 @@
+"""ai.explain — AI explanation node wired to AI_AND_INTEGRATION/AI_CODE_CHECKER."""
+
 from __future__ import annotations
 
 import json
 import logging
+import os
+import sys
+from pathlib import Path
 from typing import Any
 
+import httpx
 from pydantic import BaseModel, Field
+from sqlmodel import Session
 
 from app.config import get_settings
 from app.core.crypto import decrypt
 from app.core.db import get_engine
+from app.core.masking import mask_evidence, redact_text
 from app.core.models import Credential, Finding
-from app.nodes.ai.llm_client import chat_completion
-from app.nodes.ai.prompts import SYSTEM_PROMPT, build_user_payload
 from app.nodes.ai.validator import fallback_report, validate_llm_response
 from app.nodes.base import BaseNode, NodeContext, Port
 from app.nodes.registry import register_node
-from sqlmodel import Session
 
 logger = logging.getLogger(__name__)
+
+_AI_CHECKER_DIR = Path(__file__).resolve().parents[4] / "AI_AND_INTEGRATION" / "AI_CODE_CHECKER"
+if _AI_CHECKER_DIR.is_dir() and str(_AI_CHECKER_DIR) not in sys.path:
+    sys.path.insert(0, str(_AI_CHECKER_DIR))
+
+MAX_BATCH_SIZE = 32
 
 
 class Params(BaseModel):
     credential_id: str = Field("", description="LLM credential id (preferred)")
-    model: str = Field("", description="Override model name")
-    base_url: str = Field("", description="Override OpenAI-compatible base URL")
+    model: str = Field("", description="Optional model name override")
+    provider: str = Field("", description="gemini or openai_compatible (defaults to LLM_PROVIDER)")
 
 
 def _findings_as_dicts(inputs: dict[str, Any]) -> list[dict]:
@@ -33,32 +44,156 @@ def _findings_as_dicts(inputs: dict[str, Any]) -> list[dict]:
     out: list[dict] = []
     for item in raw if isinstance(raw, list) else []:
         if isinstance(item, Finding):
-            d = item.model_dump(by_alias=True)
-            # strip raw secrets — evidence should already be masked
-            out.append(d)
+            out.append(item.model_dump(by_alias=True))
         elif isinstance(item, dict):
             out.append(item)
     return out
 
 
-def _resolve_llm_key(params: Params) -> tuple[str | None, str | None, str | None]:
+def _resolve_gemini_config(params: Params) -> tuple[str | None, str | None]:
     settings = get_settings()
-    key = settings.llm_api_key or None
-    base = params.base_url or None
-    model = params.model or None
+    key = settings.llm_api_key or os.getenv("GEMINI_API_KEY", "").strip() or None
+    model = params.model or os.getenv("GEMINI_MODEL", "").strip() or None
     if params.credential_id:
         with Session(get_engine()) as session:
             cred = session.get(Credential, params.credential_id)
             if cred and cred.encrypted_value:
                 raw = decrypt(cred.encrypted_value)
-                # token or token|base_url|model
                 parts = [p.strip() for p in raw.split("|")]
-                key = parts[0] or key
-                if len(parts) > 1 and parts[1]:
-                    base = base or parts[1]
+                if parts[0]:
+                    key = parts[0]
                 if len(parts) > 2 and parts[2]:
                     model = model or parts[2]
-    return key, base, model
+    return key, model
+
+
+def _to_canonical_security_findings(findings: list[dict]) -> list[dict]:
+    """Map platform Finding dicts into AI_CODE_CHECKER SecurityFinding v1.0 dicts."""
+    canonical: list[dict] = []
+    for f in findings:
+        cat = str(f.get("category") or "FINDING")
+        rule_id = str(
+            f.get("rule_id")
+            or f.get("class")
+            or f.get("advisoryId")
+            or f"{cat.lower()}.finding"
+        ).strip() or "unknown"
+        file_path = str(f.get("path") or "unknown").strip() or "unknown"
+        line = f.get("line")
+        if not isinstance(line, int) or isinstance(line, bool) or line < 1:
+            line = None
+        sev = str(f.get("severity") or "MEDIUM").strip() or "MEDIUM"
+        desc = f.get("description")
+        if not desc or not str(desc).strip():
+            detail = f.get("class") or (
+                f"{f.get('group', '')}:{f.get('artifact', '')}@{f.get('version', '')}"
+                if cat == "SCA"
+                else ""
+            )
+            desc = f"{cat}: {detail}".strip(": ") or "Security finding"
+        msg = redact_text(str(desc))[:1000]
+        ev_raw = f.get("evidence")
+        ev = mask_evidence(str(ev_raw)) if ev_raw else None
+        canonical.append(
+            {
+                "rule_id": rule_id,
+                "file": file_path,
+                "line": line,
+                "severity": sev,
+                "message": msg,
+                "evidence": ev,
+            }
+        )
+    return canonical
+
+
+async def _run_checker_batch_without_env_mutation(
+    batch: list[dict], api_key: str, model: str | None
+) -> dict[str, Any]:
+    """Execute AI_CODE_CHECKER pipeline with explicit api_key & model (no os.environ mutation)."""
+    import services.ai_service as ai_svc  # type: ignore[import-not-found]
+
+    # Respect monkeypatched analyze_findings in tests
+    if getattr(ai_svc.analyze_findings, "__module__", "") != "services.ai_service":
+        return await ai_svc.analyze_findings(batch)
+
+    parsed_findings = ai_svc._parse_findings(batch)
+    configured_model = (model or ai_svc.DEFAULT_MODEL).strip() or ai_svc.DEFAULT_MODEL
+    async with httpx.AsyncClient(timeout=ai_svc.TIMEOUT_SECONDS) as client:
+        available = await ai_svc._list_generation_models(client, api_key)
+        queue = ai_svc._candidate_models(available, configured_model)
+        last_error: ai_svc.AIServiceError | None = None
+        attempts = 0
+        while queue and attempts < ai_svc.MAX_MODEL_ATTEMPTS:
+            mdl = queue.pop(0)
+            attempts += 1
+            try:
+                payload = await ai_svc._generate_with_retry(client, api_key, mdl, parsed_findings)
+            except ai_svc._SwitchModel as exc:
+                last_error = exc.error
+                if exc.permanent:
+                    ai_svc._unavailable_models.add(mdl)
+                ai_svc._promote_recommended(queue, exc.recommended, available)
+                continue
+            ai_svc._remember_model(mdl)
+            return ai_svc._build_report(payload, parsed_findings)
+
+    if last_error is not None:
+        raise ai_svc.AIServiceError(
+            "Не удалось получить анализ ни от одной доступной модели Gemini "
+            f"с поддержкой generateContent. Последняя ошибка: {last_error}",
+            status_code=last_error.status_code,
+            detail=last_error.detail,
+        )
+    raise ai_svc.AIServiceError("Gemini API не вернул моделей с поддержкой generateContent.")
+
+
+async def _call_ai_code_checker(findings: list[dict], api_key: str, model: str | None) -> dict[str, Any]:
+    canonical = _to_canonical_security_findings(findings)
+    all_items: list[dict] = []
+    summaries: list[str] = []
+    for offset in range(0, len(canonical), MAX_BATCH_SIZE):
+        batch = canonical[offset : offset + MAX_BATCH_SIZE]
+        report = await _run_checker_batch_without_env_mutation(batch, api_key, model)
+        if report.get("summary"):
+            summaries.append(str(report["summary"]))
+        for idx_in_batch, entry in enumerate(report.get("findings") or []):
+            all_items.append(
+                {
+                    "finding_ref": offset + idx_in_batch,
+                    "explanation": str(entry.get("explanation") or ""),
+                    "risk": str(entry.get("risk") or ""),
+                    "fix_steps": [str(entry["recommendation"])] if entry.get("recommendation") else [],
+                }
+            )
+    return {
+        "summary": " ".join(summaries).strip() or f"Проанализировано находок: {len(findings)}.",
+        "items": all_items,
+    }
+
+
+async def _call_openai_compatible(findings: list[dict], api_key: str | None, model: str | None) -> dict[str, Any]:
+    """JSON-only response from OpenAI-style local/cloud models; validated after call."""
+    from app.nodes.ai.llm_client import chat_completion
+
+    compact = _to_canonical_security_findings(findings)
+    safe_input = [
+        {"finding_ref": i, **item} for i, item in enumerate(compact)
+    ]
+    text = await chat_completion(
+        [
+            {"role": "system", "content": (
+                "You are a security explainer, NOT a vulnerability detector. "
+                "Only explain provided findings. Return a JSON object with keys 'summary' and 'items'. "
+                "Each item has integer finding_ref, string explanation, string risk, string[] fix_steps. "
+                "Reference only provided finding_ref numbers, paths and advisory IDs. "
+                "Never fabricate CVEs; never disclose credentials or literal secret values. "
+                "Use Russian language. Return JSON only."
+            )},
+            {"role": "user", "content": json.dumps(safe_input, ensure_ascii=False)},
+        ], model=model, api_key=api_key,
+    )
+    return json.loads(text)
 
 
 @register_node
@@ -89,48 +224,52 @@ class AiExplainNode(BaseNode):
                 "report": {
                     "summary": fb.summary,
                     "items": [],
-                    "validation": {**validation, "passed": True, "mode": "empty"},
+                    "validation": {**validation, "passed": True, "mode": "empty", "fallback_reason": None},
                     "findings": [],
                 }
             }
 
-        key, base, model = _resolve_llm_key(params)
+        key, model = _resolve_gemini_config(params)
         settings = get_settings()
-
-        async def _call() -> tuple[Any, dict]:
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_user_payload(findings)},
-            ]
-            raw = await chat_completion(
-                messages,
-                model=model,
-                api_key=key,
-                base_url=base,
-            )
-            return validate_llm_response(raw, findings)
-
+        provider = (params.provider or settings.llm_provider).strip().lower()
+        if not model:
+            model = settings.llm_model if provider == "openai_compatible" else None
         parsed = None
+        fallback_reason: str | None = None
         try:
-            if not key and not settings.llm_api_key:
-                raise RuntimeError("LLM API key not configured")
-            parsed, validation = await _call()
+            if provider not in ("gemini", "openai_compatible"):
+                raise ValueError("LLM_PROVIDER must be gemini or openai_compatible")
+            if provider == "gemini" and not key:
+                raise RuntimeError("GEMINI_API_KEY / LLM_API_KEY is not configured")
+            if provider == "openai_compatible" and not key:
+                from urllib.parse import urlsplit
+                host = (urlsplit(settings.llm_base_url).hostname or "").lower()
+                if host not in ("localhost", "127.0.0.1", "::1"):
+                    raise RuntimeError("LLM_API_KEY required for a non-local model")
+            call_model = _call_openai_compatible if provider == "openai_compatible" else _call_ai_code_checker
+            raw_obj = await call_model(findings, key, model)
+            parsed, validation = validate_llm_response(json.dumps(raw_obj, ensure_ascii=False), findings)
             if parsed is None or not validation.get("passed"):
                 validation["retried"] = True
-                parsed, validation2 = await _call()
+                raw_obj2 = await call_model(findings, key, model)
+                parsed, validation2 = validate_llm_response(json.dumps(raw_obj2, ensure_ascii=False), findings)
                 validation = {**validation2, "retried": True}
         except Exception as e:
-            logger.warning("LLM explain failed: %s — using fallback", e)
+            safe_err = redact_text(str(e), [key] if key else None)
+            logger.warning("AI_CODE_CHECKER explain failed: %s — using fallback", safe_err)
             validation["errors"] = validation.get("errors") or []
-            validation["errors"].append(str(e))
+            validation["errors"].append(safe_err)
+            fallback_reason = safe_err
             parsed = None
 
         if parsed is None or not parsed.items:
             parsed = fallback_report(findings)
             validation["passed"] = False
             validation["mode"] = "fallback"
+            validation["fallback_reason"] = fallback_reason or "LLM response failed validation or returned no items"
         else:
             validation["mode"] = "llm"
+            validation["fallback_reason"] = None
 
         return {
             "report": {

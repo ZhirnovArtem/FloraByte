@@ -32,6 +32,9 @@ uvicorn app.main:app --reload --port 8000
 |------------|------------|--------------|
 | `APP_SECRET_KEY` | Ключ Fernet (если пусто — генерируется) | — |
 | `USE_STUB_SCANNERS` | Стабы сканеров (только dev) | `0` |
+| `LLM_PROVIDER` | `gemini` (обычный) или `openai_compatible` (локальный) | `gemini` |
+| `WORKFLOW_ACCESS_TOKEN` | Опциональная защита API и WebSocket демо | — |
+| `CI_TOKEN` | Ключ отдельного CI gate endpoint | — |
 | `LLM_BASE_URL` | OpenAI-совместимый endpoint | Gemini OpenAI endpoint |
 | `LLM_MODEL` | Модель | `gemini-2.0-flash` |
 | `LLM_API_KEY` | Ключ LLM | — |
@@ -43,6 +46,7 @@ uvicorn app.main:app --reload --port 8000
 Переключение на локальную Ollama:
 
 ```env
+LLM_PROVIDER=openai_compatible
 LLM_BASE_URL=http://localhost:11434/v1
 LLM_MODEL=llama3.2
 LLM_API_KEY=ollama

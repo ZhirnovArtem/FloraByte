@@ -5,11 +5,32 @@ node_modules/
 # Результаты сборки
 dist/
 **/dist/
+build/
+*.egg-info/
 
-# Python backend
+# Python
 __pycache__/
+**/__pycache__/
 .venv/
-*.pyc
+venv/
+env/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# База данных и runtime
+*.db
+*.sqlite
+*.sqlite3
+runs/
+/tmp/
 
 # Секреты
 .env
@@ -18,6 +39,12 @@ __pycache__/
 **/.env
 **/.env.*
 !**/.env.example
+APP_SECRET_KEY
+secrets/
+*.pem
 
-# Логи
+# Логи и IDE
 *.log
+.DS_Store
+.idea/
+.vscode/

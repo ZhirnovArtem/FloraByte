@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+import ipaddress
+import socket
+from urllib.parse import urlsplit
 from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field
 
+from app.config import get_settings
 from app.core.crypto import decrypt
 from app.core.db import get_engine
 from app.core.models import Credential
@@ -24,6 +29,26 @@ class Params(BaseModel):
     headers_json: str = Field("{}", description="Optional extra headers as JSON object string")
 
 
+async def _validate_destination(url: str) -> None:
+    """Reject internal destinations (SSRF) and optionally enforce an explicit host allowlist.
+
+    For local webhook development, set WEBHOOK_HOST_ALLOWLIST=localhost; the
+    allowlist must be explicitly configured to permit a local/private target.
+    """
+    split = urlsplit(url)
+    if split.scheme not in ("https", "http") or not split.hostname or split.username or split.password:
+        raise ValueError("Webhook must be an HTTP(S) URL without embedded credentials")
+    host = split.hostname.lower().rstrip(".")
+    allowed = {v.strip().lower().rstrip(".") for v in get_settings().webhook_host_allowlist.split(",") if v.strip()}
+    if allowed and host not in allowed:
+        raise PermissionError("Webhook hostname is not in WEBHOOK_HOST_ALLOWLIST")
+    if host in allowed:
+        return
+    addresses = await asyncio.get_running_loop().getaddrinfo(host, split.port or (443 if split.scheme == "https" else 80), type=socket.SOCK_STREAM)
+    if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
+        raise PermissionError("Webhook cannot target private, loopback or reserved addresses")
+
+
 @register_node
 class WebhookNotifyNode(BaseNode):
     type = "notify.webhook"
@@ -38,8 +63,7 @@ class WebhookNotifyNode(BaseNode):
 
     async def run(self, ctx: NodeContext, inputs: dict[str, Any], params: BaseModel) -> dict[str, Any]:
         assert isinstance(params, Params)
-        if not params.url.startswith("http://") and not params.url.startswith("https://"):
-            raise ValueError("webhook url must start with http:// or https://")
+        await _validate_destination(params.url)
 
         report = inputs.get("report") or inputs.get("in") or {}
         payload = {
@@ -64,12 +88,10 @@ class WebhookNotifyNode(BaseNode):
                     token = decrypt(cred.encrypted_value)
                     headers["Authorization"] = f"Bearer {token}"
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False, trust_env=False) as client:
             resp = await client.post(params.url, json=payload, headers=headers)
-            if resp.status_code >= 400:
-                raise RuntimeError(
-                    f"Webhook failed HTTP {resp.status_code}: {resp.text[:300]}"
-                )
+            if resp.status_code >= 300:
+                raise RuntimeError(f"Webhook failed HTTP {resp.status_code} (redirects not permitted)")
 
-        logger.info("Webhook delivered to %s for run=%s status=%s", params.url, ctx.run_id, resp.status_code)
-        return {"out": {"sent": True, "status_code": resp.status_code, "url": params.url}}
+        logger.info("Webhook delivered for run=%s status=%s", ctx.run_id, resp.status_code)
+        return {"out": {"sent": True, "status_code": resp.status_code, "sent_to_host": urlsplit(params.url).hostname}}

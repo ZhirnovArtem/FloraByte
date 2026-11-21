@@ -23,12 +23,11 @@ logger = logging.getLogger(__name__)
 class Params(BaseModel):
     credential_id: str = Field("", description="Telegram bot credential id")
     chat_id: str = Field("", description="Override chat id if not in credential/env")
-    bot_token: str = Field("", description="Override token (prefer credential/env)")
 
 
 def _resolve_token_and_chat(params: Params) -> tuple[str, str]:
     settings = get_settings()
-    token = params.bot_token or settings.telegram_bot_token
+    token = settings.telegram_bot_token
     chat_id = params.chat_id or settings.telegram_chat_id
 
     if params.credential_id:
@@ -47,7 +46,7 @@ def _resolve_token_and_chat(params: Params) -> tuple[str, str]:
     if not token:
         raise ValueError(
             "Telegram bot token not configured. Set TELEGRAM_BOT_TOKEN env, "
-            "credential_id, or params.bot_token"
+            "or credential_id"
         )
     if not chat_id:
         raise ValueError(
@@ -91,6 +90,22 @@ def _format_message(report: dict[str, Any] | None, run_id: str) -> str:
     if md and len(findings) == 0:
         lines.append("")
         lines.append("Находок нет.")
+
+    ai_items = report.get("items") or []
+    if ai_items:
+        lines.extend(["", "AI-рекомендации:"])
+        for item in ai_items[:5]:
+            if not isinstance(item, dict):
+                continue
+            ref = item.get("finding_ref", "?")
+            explanation = str(item.get("explanation") or "").replace("`", "'")
+            steps = item.get("fix_steps") or []
+            lines.append(f"• Находка #{ref}: {explanation[:200]}")
+            if steps:
+                lines.append(f"  Исправление: {str(steps[0])[:260]}")
+        mode = (report.get("validation") or {}).get("mode", "")
+        if mode == "fallback":
+            lines.append("(AI недоступен: показаны резервные рекомендации)")
 
     text = "\n".join(lines)
     # Telegram limit ~4096
@@ -136,10 +151,10 @@ class TelegramNotifyNode(BaseNode):
                 payload.pop("parse_mode", None)
                 resp = await client.post(url, json=payload)
             if resp.status_code != 200:
-                raise RuntimeError(f"Telegram API error {resp.status_code}: {resp.text[:300]}")
+                raise RuntimeError(f"Telegram API error HTTP {resp.status_code}")
             data = resp.json()
             if not data.get("ok"):
-                raise RuntimeError(f"Telegram API rejected: {data}")
+                raise RuntimeError("Telegram API rejected the message")
 
         logger.info("Telegram message sent to chat_id=%s for run=%s", chat_id, ctx.run_id)
         return {
