@@ -323,3 +323,61 @@ def test_users_file_persistence_and_login_recovery(tmp_path: Path, monkeypatch):
         assert ok.json()["authenticated"] is True
         assert ok.json()["user"]["email"] == "art.zhirnov@gmail.com"
 
+
+def test_accounts_database_db_sql_queries(tmp_path: Path, monkeypatch):
+    import sqlite3
+
+    accounts_db = tmp_path / "database.db"
+    users_file = tmp_path / "missing_users.json"
+    db1 = tmp_path / "main1.db"
+    db2 = tmp_path / "main2.db"
+
+    monkeypatch.setenv("AUTH_SQL_DB_PATH", str(accounts_db))
+    monkeypatch.setenv("AUTH_USERS_FILE", str(users_file))
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db1}")
+    monkeypatch.setenv("AUTH_REQUIRED", "1")
+    get_settings.cache_clear()
+    db_mod._engine = None
+
+    with TestClient(app) as client1:
+        reg = client1.post(
+            "/api/auth/register",
+            json={"email": "sqluser@example.com", "password": "SqlStrongPassword1!"},
+        )
+        assert reg.status_code == 200
+
+    assert accounts_db.exists()
+    with sqlite3.connect(str(accounts_db)) as conn:
+        tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        assert "accounts" in tables
+        row = conn.execute(
+            "SELECT email, password_hash, is_active FROM accounts WHERE email = ?",
+            ("sqluser@example.com",),
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "sqluser@example.com"
+        assert row[1].startswith("pbkdf2_sha256$")
+        assert "SqlStrongPassword1!" not in row[1]
+        assert row[2] == 1
+
+    # Remove JSON backup & recreate main app DB: login must succeed directly via SQL from database.db
+    if users_file.exists():
+        users_file.unlink()
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db2}")
+    get_settings.cache_clear()
+    db_mod._engine = None
+
+    with TestClient(app) as client2:
+        bad = client2.post(
+            "/api/auth/login",
+            json={"email": "sqluser@example.com", "password": "WrongPassword1!"},
+        )
+        assert bad.status_code == 401
+
+        ok = client2.post(
+            "/api/auth/login",
+            json={"email": "sqluser@example.com", "password": "SqlStrongPassword1!"},
+        )
+        assert ok.status_code == 200
+        assert ok.json()["user"]["email"] == "sqluser@example.com"
+

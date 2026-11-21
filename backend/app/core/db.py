@@ -57,9 +57,11 @@ def init_db() -> None:
     engine = get_engine()
     SQLModel.metadata.create_all(engine)
     _ensure_columns(engine)
+    from app.core.accounts_db import sync_accounts_sql_with_db
     from app.core.user_store import sync_users_with_db
 
     with Session(engine) as session:
+        sync_accounts_sql_with_db(session)
         sync_users_with_db(session)
 
 

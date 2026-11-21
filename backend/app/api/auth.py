@@ -28,6 +28,7 @@ from app.core.auth import (
     utcnow,
     verify_password,
 )
+from app.core.accounts_db import restore_user_from_sql_db, sql_update_password_hash, sql_upsert_account
 from app.core.crypto import is_production_env
 from app.core.db import get_session
 from app.core.models import PasswordResetToken, User, UserSession
@@ -88,8 +89,10 @@ def register(
         raise HTTPException(429, "Слишком много попыток регистрации. Повторите позже.")
 
     email = _norm_email(body.email)
-    existing = session.exec(select(User).where(User.email == email)).first() or restore_user_into_session(
-        session, email
+    existing = (
+        session.exec(select(User).where(User.email == email)).first()
+        or restore_user_from_sql_db(session, email)
+        or restore_user_into_session(session, email)
     )
     if existing:
         raise HTTPException(409, "Пользователь с таким email уже зарегистрирован")
@@ -98,8 +101,9 @@ def register(
     session.add(user)
     session.commit()
     session.refresh(user)
+    sql_db_path = sql_upsert_account(user)
     users_file = upsert_user_record(user)
-    logger.info("Registered user %s (saved to DB and %s)", email, users_file.name)
+    logger.info("Registered user %s (saved to SQL %s, app DB, and %s)", email, sql_db_path.name, users_file.name)
 
     raw_token, sess_row = create_user_session(session, user)
     set_session_cookie(response, request, raw_token)
@@ -121,10 +125,10 @@ def login(
     ip = _client_ip(request)
     rate_key = f"login:{ip}:{email}"
 
-    # Check DB first, then fall back to synced users file so credentials persist cleanly
+    # Check dedicated SQL accounts database (`database.db`) and main DB / users file
     user = session.exec(select(User).where(User.email == email)).first()
     if not user:
-        user = restore_user_into_session(session, email)
+        user = restore_user_from_sql_db(session, email) or restore_user_into_session(session, email)
     if not user:
         logger.warning("Login failed for %s: user not found in DB or users file", email)
         if not login_limiter.allow(rate_key):
@@ -280,6 +284,7 @@ def reset_password(
     user.password_hash = hash_password(body.new_password)
     session.add(prt)
     session.add(user)
+    sql_update_password_hash(user.email, user.password_hash)
     upsert_user_record(user)
 
     # Revoke all active sessions on password change
