@@ -209,6 +209,7 @@ export const fallbackNodeCatalog: NodeTypeSpec[] = [
       properties: {
         credential_id: { type: 'string', default: '' },
         chat_id: { type: 'string', default: '' },
+        dry_run: { type: 'boolean', default: false },
       },
     },
   },
@@ -227,6 +228,7 @@ export const fallbackNodeCatalog: NodeTypeSpec[] = [
         url: { type: 'string', default: '' },
         credential_id: { type: 'string', default: '' },
         headers_json: { type: 'string', default: '{}' },
+        dry_run: { type: 'boolean', default: false },
       },
     },
   },

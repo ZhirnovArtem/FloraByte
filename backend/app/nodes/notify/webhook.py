@@ -17,6 +17,7 @@ from sqlmodel import Session
 from app.config import get_settings
 from app.core.crypto import decrypt
 from app.core.db import get_engine
+from app.core.masking import redact_text
 from app.core.models import Credential
 from app.nodes.base import BaseNode, NodeContext, Port
 from app.nodes.registry import register_node
@@ -25,12 +26,14 @@ logger = logging.getLogger(__name__)
 
 MAX_RESPONSE_BYTES = 64 * 1024
 WEBHOOK_TIMEOUT_SEC = 15.0
+WEBHOOK_MAX_RETRIES = 3
 
 
 class Params(BaseModel):
     url: str = Field(..., description="Webhook URL")
     credential_id: str = Field("", description="Optional credential for Authorization header")
     headers_json: str = Field("{}", description="Optional extra headers as JSON object string")
+    dry_run: bool = Field(False, description="Safe test mode: validate URL and build payload without sending POST")
 
 
 async def _resolve_and_pin(url: str) -> tuple[str, str | None, str | None]:
@@ -90,15 +93,28 @@ async def _post_pinned(
 ) -> int:
     extensions = {"sni_hostname": sni_host} if sni_host else None
     async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT_SEC, follow_redirects=False, trust_env=False) as client:
-        async with client.stream("POST", target_url, json=payload, headers=headers, extensions=extensions) as resp:
-            if resp.status_code >= 300:
-                raise RuntimeError(f"Webhook failed HTTP {resp.status_code} (redirects not permitted)")
-            total = 0
-            async for chunk in resp.aiter_bytes():
-                total += len(chunk)
-                if total > MAX_RESPONSE_BYTES:
-                    raise RuntimeError("Webhook response exceeded size limit")
-            return resp.status_code
+        for attempt in range(WEBHOOK_MAX_RETRIES):
+            try:
+                async with client.stream("POST", target_url, json=payload, headers=headers, extensions=extensions) as resp:
+                    if 300 <= resp.status_code < 400:
+                        raise RuntimeError(f"Webhook failed HTTP {resp.status_code} (redirects not permitted)")
+                    if resp.status_code >= 500 and attempt + 1 < WEBHOOK_MAX_RETRIES:
+                        await asyncio.sleep(0.25 * (2 ** attempt))
+                        continue
+                    if resp.status_code >= 300:
+                        raise RuntimeError(f"Webhook failed HTTP {resp.status_code}")
+                    total = 0
+                    async for chunk in resp.aiter_bytes():
+                        total += len(chunk)
+                        if total > MAX_RESPONSE_BYTES:
+                            raise RuntimeError("Webhook response exceeded size limit")
+                    return resp.status_code
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                if attempt + 1 < WEBHOOK_MAX_RETRIES:
+                    await asyncio.sleep(0.25 * (2 ** attempt))
+                    continue
+                raise RuntimeError(f"Webhook delivery error: {exc}") from exc
+    raise RuntimeError("Webhook delivery failed")
 
 
 @register_node
@@ -118,10 +134,21 @@ class WebhookNotifyNode(BaseNode):
         target_url, host_header, sni_host = await _resolve_and_pin(params.url)
 
         report = inputs.get("report") or inputs.get("in") or {}
+        safe_report = json.loads(redact_text(json.dumps(report if isinstance(report, dict) else {"value": str(report)}, ensure_ascii=False)))
         payload = {
             "run_id": ctx.run_id,
-            "report": report if isinstance(report, dict) else {"value": str(report)},
+            "report": safe_report,
         }
+
+        if params.dry_run:
+            return {
+                "out": {
+                    "sent": False,
+                    "dry_run": True,
+                    "sent_to_host": urlsplit(params.url).hostname,
+                    "payload_keys": list(payload.keys()),
+                }
+            }
 
         headers = {"Content-Type": "application/json"}
         if host_header:
@@ -134,6 +161,7 @@ class WebhookNotifyNode(BaseNode):
             except json.JSONDecodeError as e:
                 raise ValueError(f"headers_json is not valid JSON: {e}") from e
 
+        token: str | None = None
         if params.credential_id:
             with Session(get_engine()) as session:
                 cred = session.get(Credential, params.credential_id)
@@ -141,6 +169,9 @@ class WebhookNotifyNode(BaseNode):
                     token = decrypt(cred.encrypted_value)
                     headers["Authorization"] = f"Bearer {token}"
 
-        status_code = await _post_pinned(target_url, payload, headers, sni_host)
+        try:
+            status_code = await _post_pinned(target_url, payload, headers, sni_host)
+        except Exception as exc:
+            raise RuntimeError(redact_text(str(exc), [token] if token else None)) from exc
         logger.info("Webhook delivered for run=%s status=%s", ctx.run_id, status_code)
         return {"out": {"sent": True, "status_code": status_code, "sent_to_host": urlsplit(params.url).hostname}}
