@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import * as api from '../api/client';
 import type { AuthUserDto } from '../types/workflow';
 
-type Mode = 'login' | 'register' | 'forgot' | 'reset';
+type Mode = 'login' | 'register';
 
 type AuthScreenProps = {
   persistentStorage?: boolean;
@@ -14,21 +14,17 @@ export default function AuthScreen({ persistentStorage = true, onAuthenticated }
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [resetCode, setResetCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
 
   const switchMode = (next: Mode) => {
     setMode(next);
     setError('');
-    setNotice('');
   };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
-    setNotice('');
 
     if (mode === 'login') {
       setBusy(true);
@@ -47,62 +43,26 @@ export default function AuthScreen({ persistentStorage = true, onAuthenticated }
       return;
     }
 
-    if (mode === 'register') {
-      if (password.length < 8) {
-        setError('Пароль должен содержать минимум 8 символов.');
-        return;
-      }
-      if (password !== confirmPassword) {
-        setError('Пароли не совпадают.');
-        return;
-      }
-      setBusy(true);
-      try {
-        const res = await api.registerUser(email.trim(), password);
-        if (res.authenticated && res.user) {
-          onAuthenticated(res.user);
-        } else {
-          setError('Не удалось завершить регистрацию.');
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(false);
-      }
+    if (password.length < 8) {
+      setError('Пароль должен содержать минимум 8 символов.');
       return;
     }
-
-    if (mode === 'forgot') {
-      setBusy(true);
-      try {
-        const res = await api.forgotPassword(email.trim());
-        setNotice(res.message);
-        setMode('reset');
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(false);
-      }
+    if (password !== confirmPassword) {
+      setError('Пароли не совпадают.');
       return;
     }
-
-    if (mode === 'reset') {
-      if (password.length < 8) {
-        setError('Новый пароль должен содержать минимум 8 символов.');
-        return;
+    setBusy(true);
+    try {
+      const res = await api.registerUser(email.trim(), password);
+      if (res.authenticated && res.user) {
+        onAuthenticated(res.user);
+      } else {
+        setError('Не удалось завершить регистрацию.');
       }
-      setBusy(true);
-      try {
-        const res = await api.resetPassword(email.trim(), resetCode.trim(), password);
-        setPassword('');
-        setResetCode('');
-        setMode('login');
-        setNotice(res.message);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(false);
-      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -216,22 +176,6 @@ export default function AuthScreen({ persistentStorage = true, onAuthenticated }
           </div>
         )}
 
-        {notice && (
-          <div
-            style={{
-              marginBottom: 14,
-              padding: '9px 12px',
-              borderRadius: 8,
-              background: '#eff6ff',
-              border: '1px solid #bfdbfe',
-              color: '#1e3a8a',
-              fontSize: 12,
-            }}
-          >
-            {notice}
-          </div>
-        )}
-
         <form onSubmit={(e) => void handleSubmit(e)} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, fontWeight: 600, color: '#334155' }}>
             Email
@@ -251,45 +195,24 @@ export default function AuthScreen({ persistentStorage = true, onAuthenticated }
             />
           </label>
 
-          {mode === 'reset' && (
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, fontWeight: 600, color: '#334155' }}>
-              Код восстановления
-              <input
-                type="text"
-                required
-                value={resetCode}
-                onChange={(e) => setResetCode(e.target.value)}
-                placeholder="123456-abcd"
-                style={{
-                  padding: '9px 11px',
-                  borderRadius: 8,
-                  border: '1px solid #cbd5e1',
-                  fontSize: 14,
-                }}
-              />
-            </label>
-          )}
-
-          {mode !== 'forgot' && (
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, fontWeight: 600, color: '#334155' }}>
-              {mode === 'reset' ? 'Новый пароль (мин. 8 символов)' : 'Пароль'}
-              <input
-                type="password"
-                required
-                minLength={8}
-                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                style={{
-                  padding: '9px 11px',
-                  borderRadius: 8,
-                  border: '1px solid #cbd5e1',
-                  fontSize: 14,
-                }}
-              />
-            </label>
-          )}
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, fontWeight: 600, color: '#334155' }}>
+            Пароль
+            <input
+              type="password"
+              required
+              minLength={8}
+              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              style={{
+                padding: '9px 11px',
+                borderRadius: 8,
+                border: '1px solid #cbd5e1',
+                fontSize: 14,
+              }}
+            />
+          </label>
 
           {mode === 'register' && (
             <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, fontWeight: 600, color: '#334155' }}>
@@ -327,15 +250,7 @@ export default function AuthScreen({ persistentStorage = true, onAuthenticated }
               cursor: busy ? 'wait' : 'pointer',
             }}
           >
-            {busy
-              ? 'Подождите…'
-              : mode === 'login'
-                ? 'Войти'
-                : mode === 'register'
-                  ? 'Создать аккаунт'
-                  : mode === 'forgot'
-                    ? 'Запросить восстановление'
-                    : 'Обновить пароль'}
+            {busy ? 'Подождите…' : mode === 'login' ? 'Войти' : 'Создать аккаунт'}
           </button>
         </form>
 
@@ -345,45 +260,12 @@ export default function AuthScreen({ persistentStorage = true, onAuthenticated }
             paddingTop: 12,
             borderTop: '1px solid #e2e8f0',
             display: 'flex',
-            justifyContent: 'space-between',
+            justifyContent: 'flex-end',
             alignItems: 'center',
             fontSize: 12,
             color: '#64748b',
           }}
         >
-          {mode === 'login' ? (
-            <button
-              type="button"
-              onClick={() => switchMode('forgot')}
-              style={{
-                background: 'none',
-                border: 'none',
-                padding: 0,
-                color: '#4f46e5',
-                cursor: 'pointer',
-                fontSize: 12,
-                fontWeight: 600,
-              }}
-            >
-              Забыли пароль?
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => switchMode('login')}
-              style={{
-                background: 'none',
-                border: 'none',
-                padding: 0,
-                color: '#4f46e5',
-                cursor: 'pointer',
-                fontSize: 12,
-                fontWeight: 600,
-              }}
-            >
-              ← Вернуться ко входу
-            </button>
-          )}
           <span>HttpOnly сессия</span>
         </div>
       </div>

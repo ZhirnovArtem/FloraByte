@@ -159,26 +159,6 @@ export async function logoutUser(): Promise<void> {
   }
 }
 
-export async function forgotPassword(email: string): Promise<{ ok: boolean; message: string }> {
-  return requestJson<{ ok: boolean; message: string }>('/api/auth/forgot-password', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email }),
-  });
-}
-
-export async function resetPassword(
-  email: string,
-  token: string,
-  new_password: string,
-): Promise<{ ok: boolean; message: string }> {
-  return requestJson<{ ok: boolean; message: string }>('/api/auth/reset-password', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, token, new_password }),
-  });
-}
-
 export async function fetchNodeTypes(): Promise<NodeTypeSpec[]> {
   const data = await requestJson<{ nodes: NodeTypeSpec[] }>('/api/node-types');
   return data.nodes ?? [];

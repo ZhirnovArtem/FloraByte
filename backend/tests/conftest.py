@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from app.core.auth import login_limiter, register_limiter, reset_limiter
+from app.core.auth import login_limiter, register_limiter
 
 
 def authenticate_client(
@@ -15,7 +15,6 @@ def authenticate_client(
     """Register (or log in) a test user, keeping HttpOnly cookie + X-CSRF-Token on the TestClient."""
     login_limiter._hits.clear()
     register_limiter._hits.clear()
-    reset_limiter._hits.clear()
 
     res = client.post("/api/auth/register", json={"email": email, "password": password})
     if res.status_code == 409:

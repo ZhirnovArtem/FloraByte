@@ -1,37 +1,31 @@
-"""Authentication API: register, login, logout, session introspection (/me), password recovery."""
+"""Authentication API: register, login, logout, session introspection (/me)."""
 
 from __future__ import annotations
 
 import logging
-import os
 import re
-import secrets
-from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from app.config import get_settings
+from app.core.accounts_db import restore_user_from_sql_db, sql_upsert_account
 from app.core.auth import (
     SESSION_COOKIE_NAME,
-    _as_utc,
     clear_session_cookie,
     create_user_session,
     hash_password,
     hash_token,
     login_limiter,
     register_limiter,
-    reset_limiter,
     resolve_session_from_token,
     set_session_cookie,
-    utcnow,
     verify_password,
 )
-from app.core.accounts_db import restore_user_from_sql_db, sql_update_password_hash, sql_upsert_account
 from app.core.crypto import is_production_env
 from app.core.db import get_session
-from app.core.models import PasswordResetToken, User, UserSession
+from app.core.models import User, UserSession
 from app.core.user_store import restore_user_into_session, upsert_user_record
 
 logger = logging.getLogger(__name__)
@@ -43,16 +37,6 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 class AuthCredentials(BaseModel):
     email: str = Field(..., min_length=3, max_length=254)
     password: str = Field(..., min_length=8, max_length=128)
-
-
-class ForgotPasswordRequest(BaseModel):
-    email: str = Field(..., min_length=3, max_length=254)
-
-
-class ResetPasswordRequest(BaseModel):
-    email: str = Field(..., min_length=3, max_length=254)
-    token: str = Field(..., min_length=6, max_length=128)
-    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 def _norm_email(email: str) -> str:
@@ -204,96 +188,3 @@ def me(request: Request, session: Session = Depends(get_session)):
         "csrf_token": sess_row.csrf_token,
         "persistent_storage": persistent_storage,
     }
-
-
-@router.post("/forgot-password")
-def forgot_password(
-    body: ForgotPasswordRequest,
-    request: Request,
-    session: Session = Depends(get_session),
-):
-    ip = _client_ip(request)
-    if not reset_limiter.allow(f"reset:{ip}"):
-        raise HTTPException(429, "Слишком много запросов восстановления. Повторите через 5 минут.")
-
-    email = _norm_email(body.email)
-    user = session.exec(select(User).where(User.email == email)).first()
-    if user:
-        # Invalidate previous unused reset tokens for this user
-        prev_tokens = session.exec(
-            select(PasswordResetToken).where(
-                PasswordResetToken.user_id == user.id,
-                PasswordResetToken.used == False,  # noqa: E712
-            )
-        ).all()
-        for pt in prev_tokens:
-            pt.used = True
-            session.add(pt)
-
-        reset_code = f"{secrets.randbelow(1_000_000):06d}-{secrets.token_hex(4)}"
-        prt = PasswordResetToken(
-            user_id=user.id,
-            token_hash=hash_token(reset_code),
-            expires_at=utcnow() + timedelta(minutes=15),
-            used=False,
-        )
-        session.add(prt)
-        session.commit()
-
-        # Optional SMTP delivery if configured
-        smtp_host = os.getenv("SMTP_HOST", "").strip()
-        if smtp_host:
-            logger.info("Password reset token generated and queued for SMTP delivery to user=%s", user.id)
-        else:
-            logger.warning("Password reset code generated for %s (configure SMTP_HOST for email delivery): %s", email, reset_code)
-
-    # Always return generic 200 to avoid email enumeration
-    return {
-        "ok": True,
-        "message": "Если аккаунт с таким email существует, код восстановления сформирован (действует 15 минут).",
-    }
-
-
-@router.post("/reset-password")
-def reset_password(
-    body: ResetPasswordRequest,
-    request: Request,
-    session: Session = Depends(get_session),
-):
-    ip = _client_ip(request)
-    if not reset_limiter.allow(f"reset-confirm:{ip}"):
-        raise HTTPException(429, "Слишком много попыток сброса пароля. Повторите через 5 минут.")
-
-    email = _norm_email(body.email)
-    user = session.exec(select(User).where(User.email == email)).first()
-    if not user:
-        raise HTTPException(400, "Неверный или просроченный код восстановления")
-
-    th = hash_token(body.token.strip())
-    prt = session.exec(
-        select(PasswordResetToken).where(
-            PasswordResetToken.user_id == user.id,
-            PasswordResetToken.token_hash == th,
-            PasswordResetToken.used == False,  # noqa: E712
-        )
-    ).first()
-    if not prt or _as_utc(prt.expires_at) <= utcnow():
-        raise HTTPException(400, "Неверный или просроченный код восстановления")
-
-    prt.used = True
-    user.password_hash = hash_password(body.new_password)
-    session.add(prt)
-    session.add(user)
-    sql_update_password_hash(user.email, user.password_hash)
-    upsert_user_record(user)
-
-    # Revoke all active sessions on password change
-    active_sessions = session.exec(
-        select(UserSession).where(UserSession.user_id == user.id, UserSession.revoked == False)  # noqa: E712
-    ).all()
-    for s in active_sessions:
-        s.revoked = True
-        session.add(s)
-
-    session.commit()
-    return {"ok": True, "message": "Пароль успешно обновлён. Войдите с новым паролем."}

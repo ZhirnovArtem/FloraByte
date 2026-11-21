@@ -23,7 +23,6 @@ _PBKDF2_ITERS = 310_000
 # Brute-force protection: max 5 failed logins per 5 minutes per IP / email
 login_limiter = SlidingWindowLimiter(max_requests=5, window_seconds=300)
 register_limiter = SlidingWindowLimiter(max_requests=10, window_seconds=300)
-reset_limiter = SlidingWindowLimiter(max_requests=5, window_seconds=300)
 
 
 def utcnow() -> datetime:

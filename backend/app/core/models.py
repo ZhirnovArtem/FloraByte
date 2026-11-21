@@ -215,17 +215,6 @@ class UserSession(SQLModel, table=True):
     created_at: datetime = SQLField(default_factory=_utcnow)
 
 
-class PasswordResetToken(SQLModel, table=True):
-    __tablename__ = "password_reset_tokens"
-
-    id: str = SQLField(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    user_id: str = SQLField(index=True)
-    token_hash: str = SQLField(index=True)
-    expires_at: datetime
-    used: bool = False
-    created_at: datetime = SQLField(default_factory=_utcnow)
-
-
 class CustomNode(SQLModel, table=True):
     __tablename__ = "custom_nodes"
 

@@ -1,9 +1,8 @@
-"""Auth modernization tests: registration, HttpOnly cookies, CSRF/Origin, rate limiting, reset, and owner isolation."""
+"""Auth modernization tests: registration, HttpOnly cookies, CSRF/Origin, rate limiting, and owner isolation."""
 
 from __future__ import annotations
 
 import secrets
-from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,13 +12,10 @@ import app.core.db as db_mod
 from app.config import get_settings
 from app.core.auth import (
     SESSION_COOKIE_NAME,
-    hash_token,
     login_limiter,
     register_limiter,
-    reset_limiter,
-    utcnow,
 )
-from app.core.models import PasswordResetToken, User
+from app.core.models import User
 from app.main import app
 
 
@@ -39,7 +35,6 @@ def auth_client(tmp_path, monkeypatch):
     settings.upload_dir.mkdir()
     login_limiter._hits.clear()
     register_limiter._hits.clear()
-    reset_limiter._hits.clear()
     db_mod._engine = None
     SQLModel.metadata.drop_all(db_mod.get_engine())
     db_mod.init_db()
@@ -159,7 +154,7 @@ def test_csrf_and_origin_enforcement(auth_client: TestClient):
     assert ok.status_code == 200
 
 
-def test_login_bruteforce_rate_limit_and_password_reset(auth_client: TestClient):
+def test_login_bruteforce_rate_limit_and_no_password_reset(auth_client: TestClient):
     auth_client.post(
         "/api/auth/register",
         json={"email": "brute@example.com", "password": "OldPassword123!"},
@@ -180,43 +175,23 @@ def test_login_bruteforce_rate_limit_and_password_reset(auth_client: TestClient)
     )
     assert locked.status_code == 429
 
-    # Password reset flow
-    forgot = auth_client.post("/api/auth/forgot-password", json={"email": "brute@example.com"})
-    assert forgot.status_code == 200
-
-    reset_code = "654321-abcd"
-    with Session(db_mod.get_engine()) as session:
-        user = session.exec(select(User).where(User.email == "brute@example.com")).first()
-        assert user is not None
-        prt = PasswordResetToken(
-            user_id=user.id,
-            token_hash=hash_token(reset_code),
-            expires_at=utcnow() + timedelta(minutes=10),
-            used=False,
-        )
-        session.add(prt)
-        session.commit()
-
-    reset = auth_client.post(
-        "/api/auth/reset-password",
-        json={"email": "brute@example.com", "token": reset_code, "new_password": "NewPassword456!"},
+    # Password reset endpoints have been removed
+    assert auth_client.post("/api/auth/forgot-password", json={"email": "brute@example.com"}).status_code == 404
+    assert (
+        auth_client.post(
+            "/api/auth/reset-password",
+            json={"email": "brute@example.com", "token": "123456-abcd", "new_password": "NewPassword456!"},
+        ).status_code
+        == 404
     )
-    assert reset.status_code == 200
 
-    # Clear limiter to verify new password works and old fails
+    # Clear limiter to verify existing password still works
     login_limiter.clear("login:testclient:brute@example.com")
     login_limiter._hits.clear()
     assert (
         auth_client.post(
             "/api/auth/login",
             json={"email": "brute@example.com", "password": "OldPassword123!"},
-        ).status_code
-        == 401
-    )
-    assert (
-        auth_client.post(
-            "/api/auth/login",
-            json={"email": "brute@example.com", "password": "NewPassword456!"},
         ).status_code
         == 200
     )
