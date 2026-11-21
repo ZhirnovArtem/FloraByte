@@ -221,10 +221,31 @@ async def test_ai_integration(
             async with httpx.AsyncClient(timeout=12.0) as client:
                 resp = await client.get(
                     "https://generativelanguage.googleapis.com/v1beta/models",
-                    params={"key": key},
+                    headers={"x-goog-api-key": key},
+                    params={"pageSize": 100},
                 )
             if resp.status_code == 200:
-                return {"ok": True, "provider": provider, "model": model, "detail": "Подключение к Gemini API подтверждено."}
+                models = resp.json().get("models") or []
+                gen_models = {
+                    str(m.get("name", "")).removeprefix("models/").strip()
+                    for m in models
+                    if isinstance(m, dict) and "generateContent" in (m.get("supportedGenerationMethods") or [])
+                }
+                if model and model not in gen_models:
+                    return {
+                        "ok": False,
+                        "provider": provider,
+                        "model": model,
+                        "detail": f"API-ключ действителен, но модель '{model}' недоступна для generateContent.",
+                    }
+                return {"ok": True, "provider": provider, "model": model, "detail": "Подключение к Gemini API и доступность модели подтверждены."}
+            if resp.status_code in (400, 401, 403):
+                return {
+                    "ok": False,
+                    "provider": provider,
+                    "model": model,
+                    "detail": f"Неверный API-ключ Gemini или доступ запрещён (HTTP {resp.status_code}).",
+                }
             return {
                 "ok": False,
                 "provider": provider,

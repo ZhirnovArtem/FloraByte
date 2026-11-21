@@ -157,11 +157,13 @@ class Executor:
         active_ports: dict[str, set[str]] = {}
         node_status: dict[str, str] = {nid: "pending" for nid in nodes}
 
-        # For skipped propagation: edge is active if source succeeded AND sourceHandle is in active ports
+        # For skipped propagation: edge is active if source succeeded (or ai.explain degraded gracefully to error report)
         def edge_active(e: dict) -> bool:
             src = e["source"]
+            src_type = (nodes.get(src) or {}).get("type")
             if node_status.get(src) != "success":
-                return False
+                if not (src_type == "ai.explain" and src in outputs):
+                    return False
             ports = active_ports.get(src)
             if not ports:
                 # success with no recorded ports → consider active
@@ -259,25 +261,53 @@ class Executor:
                 finished = _utcnow()
                 duration_ms = int((finished - started).total_seconds() * 1000)
                 preview = _preview(result)
-                node_status[node_id] = "success"
-                await self._mark_node(
-                    run_id, node_id, "success",
-                    started_at=started, finished_at=finished,
-                    output_preview=preview,
-                )
-                await event_bus.emit(
-                    run_id,
-                    {
-                        "event": "node_finished",
-                        "node_id": node_id,
-                        "status": "success",
-                        "started_at": started.isoformat(),
-                        "finished_at": finished.isoformat(),
-                        "duration_ms": duration_ms,
-                        "output_preview": preview,
-                        "error": None,
-                    },
-                )
+
+                # If ai.explain returned an error report, record node as failed while letting
+                # downstream findings.export still persist the scan findings without fake AI items.
+                ai_err = None
+                if node["type"] == "ai.explain" and isinstance(result.get("report"), dict):
+                    val = result["report"].get("validation") or {}
+                    if val.get("mode") == "error":
+                        ai_err = str(val.get("error") or "AI-анализ не выполнен. Проверьте API-ключ и доступность модели.")
+
+                if ai_err:
+                    node_status[node_id] = "failed"
+                    await self._mark_node(
+                        run_id, node_id, "failed",
+                        started_at=started, finished_at=finished,
+                        output_preview=preview, error=ai_err,
+                    )
+                    await event_bus.emit(
+                        run_id,
+                        {
+                            "event": "node_failed",
+                            "node_id": node_id,
+                            "status": "failed",
+                            "duration_ms": duration_ms,
+                            "output_preview": preview,
+                            "error": ai_err,
+                        },
+                    )
+                else:
+                    node_status[node_id] = "success"
+                    await self._mark_node(
+                        run_id, node_id, "success",
+                        started_at=started, finished_at=finished,
+                        output_preview=preview,
+                    )
+                    await event_bus.emit(
+                        run_id,
+                        {
+                            "event": "node_finished",
+                            "node_id": node_id,
+                            "status": "success",
+                            "started_at": started.isoformat(),
+                            "finished_at": finished.isoformat(),
+                            "duration_ms": duration_ms,
+                            "output_preview": preview,
+                            "error": None,
+                        },
+                    )
             except Exception as e:
                 finished = _utcnow()
                 err = redact_text(f"{type(e).__name__}: {e}")

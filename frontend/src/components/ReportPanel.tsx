@@ -113,9 +113,41 @@ export default function ReportPanel({
           </button>
 
           {run && (
-            <span style={{ fontSize: 12, color: '#334155' }}>
-              Run <code>{run.id.slice(0, 8)}</code> · Статус: <strong>{run.status}</strong> · Находок:{' '}
-              <strong>{findings.length}</strong>
+            <span style={{ fontSize: 12, color: '#334155', display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span>
+                Run <code>{run.id.slice(0, 8)}</code> · Статус: <strong>{run.status}</strong> · Сканирование:{' '}
+                <strong>{run.status === 'failed' ? 'Ошибка' : 'Успешно'}</strong> · Находок:{' '}
+                <strong>{findings.length}</strong>
+              </span>
+              {ai?.validation && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    padding: '1px 7px',
+                    borderRadius: 999,
+                    fontWeight: 700,
+                    background:
+                      ai.validation.mode === 'llm' && ai.validation.passed
+                        ? '#dcfce7'
+                        : ai.validation.mode === 'empty'
+                          ? '#e0f2fe'
+                          : '#fee2e2',
+                    color:
+                      ai.validation.mode === 'llm' && ai.validation.passed
+                        ? '#166534'
+                        : ai.validation.mode === 'empty'
+                          ? '#075985'
+                          : '#991b1b',
+                  }}
+                >
+                  AI-анализ:{' '}
+                  {ai.validation.mode === 'llm' && ai.validation.passed
+                    ? 'Успешно'
+                    : ai.validation.mode === 'empty'
+                      ? 'Нет находок'
+                      : 'Ошибка'}
+                </span>
+              )}
             </span>
           )}
         </div>
@@ -409,113 +441,160 @@ export default function ReportPanel({
                 <div style={{ color: '#64748b', fontSize: 13 }}>
                   AI-отчёт отсутствует. Настройте AI в разделе «Интеграции» или добавьте блок <code>ai.explain</code> в сценарий.
                 </div>
-              ) : (
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
-                    <strong>Общее заключение:</strong> <span>{ai.summary}</span>
-                    {ai.validation && (() => {
-                      const aiStatus =
-                        ai.validation.ai_status ||
-                        (ai.validation.mode === 'llm'
-                          ? 'LLM'
-                          : ai.validation.mode === 'empty'
-                          ? 'Нет находок'
-                          : 'Fallback');
-                      const isErr = aiStatus === 'Ошибка';
-                      const isLlm = aiStatus === 'LLM';
-                      const isEmpty = aiStatus === 'Нет находок';
-                      return (
-                        <span
-                          style={{
-                            fontSize: 11,
-                            padding: '2px 8px',
-                            borderRadius: 999,
-                            background: isLlm ? '#dcfce7' : isEmpty ? '#e0f2fe' : isErr ? '#fee2e2' : '#fef3c7',
-                            color: isLlm ? '#166534' : isEmpty ? '#075985' : isErr ? '#991b1b' : '#92400e',
-                            fontWeight: 700,
-                          }}
-                        >
-                          Статус AI: {aiStatus} · passed={String(ai.validation.passed)} · dropped_cve=
-                          {ai.validation.dropped_cve ?? 0}
-                        </span>
-                      );
-                    })()}
-                  </div>
-                  {ai.validation?.mode === 'fallback' && (
+              ) : (() => {
+                const val = ai.validation;
+                const isSuccess = val?.mode === 'llm' && val?.passed === true && ai.items.length > 0;
+                const isEmpty = val?.mode === 'empty';
+                const errText =
+                  val?.error ||
+                  val?.errors?.join('; ') ||
+                  'AI-анализ не выполнен. Проверьте API-ключ и доступность модели.';
+
+                if (isEmpty) {
+                  return (
                     <div
                       style={{
-                        padding: '8px 10px',
-                        marginBottom: 10,
-                        borderRadius: 6,
-                        background: ai.validation.ai_status === 'Ошибка' ? '#fef2f2' : '#fffbeb',
-                        border: ai.validation.ai_status === 'Ошибка' ? '1px solid #fca5a5' : '1px solid #fcd34d',
-                        color: ai.validation.ai_status === 'Ошибка' ? '#991b1b' : '#92400e',
-                        fontSize: 12,
+                        padding: 12,
+                        borderRadius: 8,
+                        background: '#f0f9ff',
+                        border: '1px solid #bae6fd',
+                        color: '#075985',
+                        fontSize: 13,
                       }}
                     >
-                      <strong>
-                        {ai.validation.ai_status === 'Ошибка' ? 'Ошибка AI-модели (использован Fallback):' : 'Резервный отчёт (Fallback):'}
-                      </strong>{' '}
-                      {ai.validation.fallback_reason ||
-                        ai.validation.errors?.join('; ') ||
-                        'LLM не настроена или не прошла валидацию — показан шаблонный отчёт.'}
+                      <strong>AI-анализ: Нет находок</strong> — уязвимости не обнаружены, анализ Gemini не требуется.
                     </div>
-                  )}
-                  {ai.items.map((item, i) => {
-                    const matched = findings[item.finding_ref];
-                    const sev = matched ? SEV_COLORS[matched.severity ?? ''] ?? { bg: '#f1f5f9', fg: '#334155', bar: '#64748b' } : null;
-                    return (
+                  );
+                }
+
+                if (!isSuccess) {
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {run && run.status !== 'failed' && (
+                        <div
+                          style={{
+                            padding: '8px 12px',
+                            borderRadius: 8,
+                            background: '#f0fdf4',
+                            border: '1px solid #bbf7d0',
+                            color: '#166534',
+                            fontSize: 12,
+                            fontWeight: 600,
+                          }}
+                        >
+                          Сканирование: Успешно — результаты сканирования сохранены (находок: {findings.length}).
+                        </div>
+                      )}
                       <div
-                        key={i}
                         style={{
-                          padding: 10,
-                          border: '1px solid #e2e8f0',
+                          padding: 12,
                           borderRadius: 8,
-                          marginBottom: 8,
-                          background: '#f8fafc',
-                          fontSize: 12,
+                          background: '#fef2f2',
+                          border: '1px solid #fca5a5',
+                          color: '#991b1b',
+                          fontSize: 13,
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontWeight: 700 }}>
-                          <span>Находка #{item.finding_ref + 1}</span>
-                          {matched && (
-                            <>
-                              {sev && (
-                                <span style={{ padding: '1px 6px', borderRadius: 5, background: sev.bg, color: sev.fg, fontSize: 11 }}>
-                                  {matched.severity ?? '—'}
-                                </span>
-                              )}
-                              <span>{matched.category}</span>
-                              <code style={{ fontWeight: 500 }}>
-                                {matched.path}
-                                {matched.line ? `:${matched.line}` : ''}
-                              </code>
-                            </>
-                          )}
-                        </div>
-                        <div style={{ marginTop: 6 }}>
-                          <strong>Объяснение проблемы:</strong> {item.explanation}
-                        </div>
-                        {item.risk && (
-                          <div style={{ marginTop: 4, color: '#9a3412' }}>
-                            <strong>Возможные последствия:</strong> {item.risk}
-                          </div>
-                        )}
-                        {item.fix_steps?.length > 0 && (
-                          <div style={{ marginTop: 4 }}>
-                            <strong>Пошаговые рекомендации по исправлению:</strong>
-                            <ul style={{ margin: '4px 0 0 18px', padding: 0 }}>
-                              {item.fix_steps.map((step, j) => (
-                                <li key={j}>{step}</li>
-                              ))}
-                            </ul>
+                        <div style={{ fontWeight: 700, marginBottom: 4 }}>AI-анализ: Ошибка</div>
+                        <div>AI-анализ не выполнен. Проверьте API-ключ и доступность модели.</div>
+                        {errText && errText !== 'AI-анализ не выполнен. Проверьте API-ключ и доступность модели.' && (
+                          <div style={{ marginTop: 6, fontSize: 12, color: '#7f1d1d' }}>
+                            Детали: {errText}
                           </div>
                         )}
                       </div>
-                    );
-                  })}
-                </div>
-              )}
+                    </div>
+                  );
+                }
+
+                return (
+                  <div>
+                    <div
+                      style={{
+                        padding: '8px 12px',
+                        marginBottom: 10,
+                        borderRadius: 8,
+                        background: '#f0fdf4',
+                        border: '1px solid #bbf7d0',
+                        color: '#166534',
+                        fontSize: 12,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 10,
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <span>
+                        <strong>AI-анализ: Успешно</strong> — Gemini успешно обработал результаты сканирования.
+                      </span>
+                      <span style={{ fontSize: 11, fontWeight: 700 }}>
+                        passed={String(val?.passed)} · dropped_cve={val?.dropped_cve ?? 0}
+                      </span>
+                    </div>
+
+                    {ai.summary && (
+                      <div style={{ marginBottom: 10, fontSize: 13 }}>
+                        <strong>Общее заключение:</strong> <span>{ai.summary}</span>
+                      </div>
+                    )}
+
+                    {ai.items.map((item, i) => {
+                      const matched = findings[item.finding_ref];
+                      const sev = matched ? SEV_COLORS[matched.severity ?? ''] ?? { bg: '#f1f5f9', fg: '#334155', bar: '#64748b' } : null;
+                      return (
+                        <div
+                          key={i}
+                          style={{
+                            padding: 10,
+                            border: '1px solid #e2e8f0',
+                            borderRadius: 8,
+                            marginBottom: 8,
+                            background: '#f8fafc',
+                            fontSize: 12,
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontWeight: 700 }}>
+                            <span>Находка #{item.finding_ref + 1}</span>
+                            {matched && (
+                              <>
+                                {sev && (
+                                  <span style={{ padding: '1px 6px', borderRadius: 5, background: sev.bg, color: sev.fg, fontSize: 11 }}>
+                                    {matched.severity ?? '—'}
+                                  </span>
+                                )}
+                                <span>{matched.category}</span>
+                                <code style={{ fontWeight: 500 }}>
+                                  {matched.path}
+                                  {matched.line ? `:${matched.line}` : ''}
+                                </code>
+                              </>
+                            )}
+                          </div>
+                          <div style={{ marginTop: 6 }}>
+                            <strong>Объяснение проблемы:</strong> {item.explanation}
+                          </div>
+                          {item.risk && (
+                            <div style={{ marginTop: 4, color: '#9a3412' }}>
+                              <strong>Возможные последствия:</strong> {item.risk}
+                            </div>
+                          )}
+                          {item.fix_steps?.length > 0 && (
+                            <div style={{ marginTop: 4 }}>
+                              <strong>Пошаговые рекомендации по исправлению:</strong>
+                              <ul style={{ margin: '4px 0 0 18px', padding: 0 }}>
+                                {item.fix_steps.map((step, j) => (
+                                  <li key={j}>{step}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
           )}
 

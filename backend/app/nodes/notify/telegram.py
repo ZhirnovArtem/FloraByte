@@ -212,10 +212,15 @@ def _format_message(report: dict[str, Any] | None, run_id: str) -> str:
         lines.append("")
         lines.append("Находок нет.")
 
-    if report.get("summary"):
-        lines.extend(["", f"Заключение: {str(report['summary'])[:450]}"])
+    val = report.get("validation") or {}
+    confirmed_ai = val.get("mode") == "llm" and val.get("passed") is True
+    ai_items = (report.get("items") or []) if confirmed_ai else []
 
-    ai_items = report.get("items") or []
+    if confirmed_ai and report.get("summary"):
+        lines.extend(["", f"Заключение AI: {str(report['summary'])[:450]}"])
+    elif val.get("mode") == "error":
+        lines.extend(["", "AI-анализ: Ошибка — AI-анализ не выполнен. Проверьте API-ключ и доступность модели."])
+
     if ai_items:
         lines.extend(["", "AI-рекомендации:"])
         for item in ai_items[:5]:
@@ -230,10 +235,6 @@ def _format_message(report: dict[str, Any] | None, run_id: str) -> str:
                 lines.append(f"  Последствия: {risk[:140]}")
             if steps:
                 lines.append(f"  Исправление: {str(steps[0])[:240]}")
-        val = report.get("validation") or {}
-        mode = val.get("mode", "")
-        if mode == "fallback":
-            lines.append("(AI недоступен или с ошибкой: показаны резервные рекомендации)")
 
     text = "\n".join(lines)
     if len(text) > 4000:

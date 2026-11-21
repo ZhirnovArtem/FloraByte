@@ -1,4 +1,4 @@
-"""ai.explain — AI explanation node wired to AI_AND_INTEGRATION/AI_CODE_CHECKER."""
+"""ai.explain — Strict AI explanation node wired to AI_AND_INTEGRATION/AI_CODE_CHECKER (no fallback)."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from app.core.crypto import decrypt
 from app.core.db import get_engine
 from app.core.masking import mask_evidence, redact_text
 from app.core.models import Credential, Finding, IntegrationSetting
-from app.nodes.ai.validator import fallback_report, load_known_advisories, validate_llm_response
+from app.nodes.ai.validator import load_known_advisories, validate_llm_response
 from app.nodes.base import BaseNode, NodeContext, Port
 from app.nodes.registry import register_node
 
@@ -29,6 +29,7 @@ if _AI_CHECKER_DIR.is_dir() and str(_AI_CHECKER_DIR) not in sys.path:
     sys.path.insert(0, str(_AI_CHECKER_DIR))
 
 MAX_BATCH_SIZE = 32
+AI_ERROR_USER_MESSAGE = "AI-анализ не выполнен. Проверьте API-ключ и доступность модели."
 
 
 class Params(BaseModel):
@@ -55,7 +56,7 @@ def _resolve_gemini_config(params: Params, owner_id: str | None = None) -> tuple
     """Return (api_key, model, base_url, provider_override)."""
     settings = get_settings()
     key = settings.llm_api_key or os.getenv("GEMINI_API_KEY", "").strip() or None
-    model = params.model or os.getenv("GEMINI_MODEL", "").strip() or None
+    model = params.model.strip() or os.getenv("GEMINI_MODEL", "").strip() or None
     base_url = params.base_url.strip() or None
     provider_override = params.provider.strip().lower() or None
 
@@ -97,6 +98,23 @@ def _resolve_gemini_config(params: Params, owner_id: str | None = None) -> tuple
         except Exception:
             pass
     return key, model, base_url, provider_override
+
+
+def _validate_api_key_format(api_key: str | None, provider: str, base_url: str) -> None:
+    if provider == "gemini":
+        if not api_key or not api_key.strip():
+            raise RuntimeError("Отсутствует API-ключ Gemini (LLM_API_KEY). Проверьте настройки интеграции.")
+        cleaned = api_key.strip()
+        if any(ch.isspace() for ch in cleaned) or len(cleaned) < 8:
+            raise RuntimeError("Некорректный формат API-ключа Gemini. Проверьте настройки интеграции.")
+        return
+
+    if not api_key or not api_key.strip():
+        from urllib.parse import urlsplit
+
+        host = (urlsplit(base_url).hostname or "").lower()
+        if host not in ("localhost", "127.0.0.1", "::1"):
+            raise RuntimeError("Отсутствует API-ключ для удалённой OpenAI-compatible модели.")
 
 
 def _to_canonical_security_findings(findings: list[dict]) -> list[dict]:
@@ -142,7 +160,7 @@ def _to_canonical_security_findings(findings: list[dict]) -> list[dict]:
 async def _run_checker_batch_without_env_mutation(
     batch: list[dict], api_key: str, model: str | None
 ) -> dict[str, Any]:
-    """Execute AI_CODE_CHECKER pipeline with explicit api_key & model (no os.environ mutation)."""
+    """Strictly verify Gemini key, API availability, model availability, and run AI_CODE_CHECKER."""
     import services.ai_service as ai_svc  # type: ignore[import-not-found]
 
     # Respect monkeypatched analyze_findings in tests
@@ -150,9 +168,20 @@ async def _run_checker_batch_without_env_mutation(
         return await ai_svc.analyze_findings(batch)
 
     parsed_findings = ai_svc._parse_findings(batch)
-    configured_model = (model or ai_svc.DEFAULT_MODEL).strip() or ai_svc.DEFAULT_MODEL
+    requested_model = (model or "").strip()
+    configured_model = requested_model or ai_svc.DEFAULT_MODEL
     async with httpx.AsyncClient(timeout=ai_svc.TIMEOUT_SECONDS) as client:
+        # Step 2.2 & 2.3: verify API key & Gemini API availability
         available = await ai_svc._list_generation_models(client, api_key)
+        if not available:
+            raise ai_svc.AIServiceError("Gemini API не вернул моделей с поддержкой generateContent.")
+
+        # Step 2.4: verify explicitly selected model availability
+        if requested_model and requested_model not in available:
+            raise ai_svc.AIServiceError(
+                f"Выбранная модель '{requested_model}' недоступна в Gemini API или не поддерживает generateContent."
+            )
+
         queue = ai_svc._candidate_models(available, configured_model)
         last_error: ai_svc.AIServiceError | None = None
         attempts = 0
@@ -187,6 +216,8 @@ async def _call_ai_code_checker(findings: list[dict], api_key: str, model: str |
     for offset in range(0, len(canonical), MAX_BATCH_SIZE):
         batch = canonical[offset : offset + MAX_BATCH_SIZE]
         report = await _run_checker_batch_without_env_mutation(batch, api_key, model)
+        if not isinstance(report, dict) or not report.get("findings"):
+            raise RuntimeError("Gemini вернул пустой отчёт без объяснений находок.")
         if report.get("summary"):
             summaries.append(str(report["summary"]))
         for idx_in_batch, entry in enumerate(report.get("findings") or []):
@@ -198,8 +229,11 @@ async def _call_ai_code_checker(findings: list[dict], api_key: str, model: str |
                     "fix_steps": [str(entry["recommendation"])] if entry.get("recommendation") else [],
                 }
             )
+    summary = " ".join(summaries).strip()
+    if not summary or not all_items:
+        raise RuntimeError("Ответ Gemini не содержит обязательных полей summary/items.")
     return {
-        "summary": " ".join(summaries).strip() or f"Проанализировано находок: {len(findings)}.",
+        "summary": summary,
         "items": all_items,
     }
 
@@ -262,19 +296,21 @@ class AiExplainNode(BaseNode):
             "retried": False,
             "dropped_items": 0,
             "dropped_cve": 0,
+            "errors": [],
         }
 
         if not findings:
-            fb = fallback_report([])
             return {
                 "report": {
-                    "summary": fb.summary,
+                    "status": "empty",
+                    "summary": "Находок для анализа нет.",
                     "items": [],
                     "validation": {
                         **validation,
                         "passed": True,
                         "mode": "empty",
                         "ai_status": "Нет находок",
+                        "error": None,
                         "fallback_reason": None,
                     },
                     "findings": [],
@@ -288,20 +324,15 @@ class AiExplainNode(BaseNode):
         if not model:
             model = settings.llm_model if provider == "openai_compatible" else None
         known_advisories = load_known_advisories(settings.vuln_db_path)
+
         parsed = None
-        fallback_reason: str | None = None
-        had_key = bool(key)
+        error_msg: str | None = None
         try:
             if provider not in ("gemini", "openai_compatible"):
-                raise ValueError("LLM_PROVIDER must be gemini or openai_compatible")
-            if provider == "gemini" and not key:
-                raise RuntimeError("AI API-ключ не настроен")
-            if provider == "openai_compatible" and not key:
-                from urllib.parse import urlsplit
-                host = (urlsplit(effective_base).hostname or "").lower()
-                if host not in ("localhost", "127.0.0.1", "::1"):
-                    raise RuntimeError("AI API-ключ обязателен для удалённой модели")
-                had_key = True
+                raise ValueError("LLM_PROVIDER должен быть 'gemini' или 'openai_compatible'.")
+
+            # Stage 2 step 1 & 2: strict key presence & format check before any call
+            _validate_api_key_format(key, provider, effective_base)
 
             async def _invoke() -> str:
                 if provider == "openai_compatible":
@@ -316,27 +347,46 @@ class AiExplainNode(BaseNode):
                 raw_text2 = await _invoke()
                 parsed, validation2 = validate_llm_response(raw_text2, findings, known_advisories=known_advisories)
                 validation = {**validation2, "retried": True}
+
+            if parsed is None or not validation.get("passed") or not parsed.items or not parsed.summary.strip():
+                errs = "; ".join(validation.get("errors") or []) or "Ответ модели не прошёл строгую проверку."
+                raise RuntimeError(errs)
         except Exception as e:
             safe_err = redact_text(str(e), [key] if key else None)
-            logger.warning("AI_CODE_CHECKER explain failed: %s — using fallback", safe_err)
-            validation["errors"] = validation.get("errors") or []
-            validation["errors"].append(safe_err)
-            fallback_reason = safe_err
+            logger.warning("AI Explain failed (no fallback): %s", safe_err)
+            errors = list(validation.get("errors") or [])
+            if safe_err and safe_err not in errors:
+                errors.append(safe_err)
+            validation["errors"] = errors
+            error_msg = safe_err or AI_ERROR_USER_MESSAGE
             parsed = None
 
-        if parsed is None or not parsed.items:
-            parsed = fallback_report(findings)
+        # Stage 3: never return templated/fallback recommendations on error
+        if parsed is None:
             validation["passed"] = False
-            validation["mode"] = "fallback"
-            validation["ai_status"] = "Ошибка" if had_key else "Fallback"
-            validation["fallback_reason"] = fallback_reason or "LLM response failed validation or returned no items"
-        else:
-            validation["mode"] = "llm"
-            validation["ai_status"] = "LLM"
+            validation["mode"] = "error"
+            validation["ai_status"] = "Ошибка"
+            validation["error"] = error_msg or AI_ERROR_USER_MESSAGE
             validation["fallback_reason"] = None
+            return {
+                "report": {
+                    "status": "error",
+                    "summary": "",
+                    "items": [],
+                    "validation": validation,
+                    "findings": findings,
+                }
+            }
+
+        validation["passed"] = True
+        validation["mode"] = "llm"
+        validation["ai_status"] = "Успешно"
+        validation["error"] = None
+        validation["fallback_reason"] = None
 
         return {
             "report": {
+                "status": "ok",
                 "summary": parsed.summary,
                 "items": [it.model_dump() for it in parsed.items],
                 "validation": validation,

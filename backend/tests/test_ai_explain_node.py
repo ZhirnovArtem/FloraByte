@@ -22,7 +22,7 @@ async def test_ai_explain_empty_findings(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ai_explain_fallback_when_no_key(tmp_path, monkeypatch):
+async def test_ai_explain_error_when_no_key(tmp_path, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     from app.config import get_settings
@@ -40,9 +40,49 @@ async def test_ai_explain_fallback_when_no_key(tmp_path, monkeypatch):
     )
     out = await node.run(ctx, {"findings": [finding]}, Params())
     rep = out["report"]
-    assert rep["validation"]["mode"] == "fallback"
-    assert rep["validation"]["fallback_reason"]
-    assert len(rep["items"]) == 1
+    assert rep["status"] == "error"
+    assert rep["summary"] == ""
+    assert rep["items"] == []
+    assert rep["validation"]["passed"] is False
+    assert rep["validation"]["mode"] == "error"
+    assert rep["validation"]["ai_status"] == "Ошибка"
+    assert rep["validation"]["error"]
+    assert len(rep["findings"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_ai_explain_rejects_unavailable_model_and_empty_response(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaFakeTestKey1234567890")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    from app.nodes.ai.explain import _run_checker_batch_without_env_mutation
+    import services.ai_service as ai_svc
+
+    # Selected model not available -> explicit error
+    with patch("services.ai_service._list_generation_models", new=AsyncMock(return_value={"gemini-3.5-flash-lite"})):
+        with pytest.raises(ai_svc.AIServiceError, match="недоступна"):
+            await _run_checker_batch_without_env_mutation(
+                [{"rule_id": "r", "file": "a.kt", "line": 1, "severity": "HIGH", "message": "msg"}],
+                api_key="AIzaFakeTestKey1234567890",
+                model="nonexistent-gemini-model",
+            )
+
+    # Empty/invalid response from model -> error mode, zero fake items, key redacted
+    node = AiExplainNode()
+    ctx = NodeContext(run_id="r2b", node_id="ai1", workspace=tmp_path)
+    finding = Finding(category="SAST", path="A.kt", **{"class": "sql"}, line=2, severity="HIGH")
+    with patch(
+        "app.nodes.ai.explain._call_ai_code_checker",
+        new=AsyncMock(side_effect=RuntimeError("Gemini failed for AIzaFakeTestKey1234567890")),
+    ):
+        out = await node.run(ctx, {"findings": [finding]}, Params())
+    rep = out["report"]
+    assert rep["validation"]["mode"] == "error"
+    assert rep["validation"]["ai_status"] == "Ошибка"
+    assert rep["items"] == []
+    assert rep["summary"] == ""
+    assert "AIzaFakeTestKey1234567890" not in rep["validation"]["error"]
 
 
 @pytest.mark.asyncio
@@ -124,6 +164,7 @@ async def test_ai_explain_uses_ai_code_checker_and_validates(tmp_path, monkeypat
 
     rep = out["report"]
     assert rep["validation"]["mode"] == "llm"
+    assert rep["validation"]["ai_status"] == "Успешно"
     assert rep["validation"]["passed"] is True
     assert rep["validation"]["dropped_cve"] == 1
     assert rep["validation"]["vuln_db_checked"] is True

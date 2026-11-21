@@ -1,4 +1,4 @@
-"""Validate LLM output: schema, finding_ref, CVE/GHSA must be from input, no leaked secrets."""
+"""Validate LLM output: strict schema, finding_ref, CVE/GHSA from input, no leaked secrets, no fallback."""
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ def validate_llm_response(
     findings: list[dict],
     known_advisories: set[str] | None = None,
 ) -> tuple[ExplainResponse | None, dict[str, Any]]:
-    """Returns (parsed_or_none, validation_meta)."""
+    """Strictly validate model output. Returns (parsed_or_none, validation_meta)."""
     meta: dict[str, Any] = {
         "passed": False,
         "retried": False,
@@ -91,6 +91,10 @@ def validate_llm_response(
         "vuln_db_checked": known_advisories is not None,
         "errors": [],
     }
+    if not raw or not str(raw).strip():
+        meta["errors"].append("empty model response")
+        return None, meta
+
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:
@@ -106,9 +110,7 @@ def validate_llm_response(
     allowed_refs = set(range(len(findings)))
     allowed_adv = _allowed_advisories(findings)
     if known_advisories:
-        # Intersect/verify advisories against the real vulnerability database when loaded
         verified_adv = {a for a in allowed_adv if a in known_advisories}
-        # If an advisory came from an external custom DB test fixture not in default DB, keep allowed_adv if empty
         if verified_adv:
             allowed_adv = verified_adv
     kept: list[ExplainItem] = []
@@ -119,9 +121,12 @@ def validate_llm_response(
             meta["errors"].append(f"bad finding_ref={item.finding_ref}")
             continue
 
+        if not str(item.explanation or "").strip():
+            meta["dropped_items"] += 1
+            meta["errors"].append(f"empty explanation for finding_ref={item.finding_ref}")
+            continue
+
         f = findings[item.finding_ref]
-        # Verify explicit source locations in explanations against this finding.
-        # Do not reject fix_steps for suggesting a *new* destination file.
         path = str(f.get("path") or "").replace("\\", "/")
         source_line = f.get("line")
         invalid_location = False
@@ -140,7 +145,6 @@ def validate_llm_response(
             continue
 
         text = item.explanation + " " + (item.risk or "") + " " + " ".join(item.fix_steps)
-        # strip invented CVEs
         for m in CVE_RE.findall(text) + GHSA_RE.findall(text):
             if m.upper() not in allowed_adv:
                 meta["dropped_cve"] += 1
@@ -155,62 +159,36 @@ def validate_llm_response(
             meta["errors"].append("possible secret leak in explanation")
             continue
 
-        # path mentioned must match if present as exact path from findings
         kept.append(item)
 
     parsed.items = kept
-    # Summary is also model-generated text: avoid fabricated advisories/credentials.
+
     for advisory in CVE_RE.findall(parsed.summary) + GHSA_RE.findall(parsed.summary):
         if advisory.upper() not in allowed_adv:
             parsed.summary = parsed.summary.replace(advisory, "[removed-id]")
             meta["dropped_cve"] += 1
+
     if TOKENISH.search(parsed.summary):
-        parsed.summary = "Автоматическое обобщение находок."
+        parsed.summary = ""
         meta["errors"].append("possible secret leak in summary")
-    meta["passed"] = len(meta["errors"]) == 0 or (len(kept) > 0 and meta["dropped_items"] == 0 and meta["dropped_cve"] == 0)
-    # softer: pass if we have any kept items and no schema failure
-    if kept and not any("schema" in e or "invalid JSON" in e for e in meta["errors"]):
-        meta["passed"] = True
-    return parsed, meta
 
+    if findings and not parsed.summary.strip():
+        meta["errors"].append("empty summary")
 
-def fallback_report(findings: list[dict]) -> ExplainResponse:
-    items = []
-    for i, f in enumerate(findings):
-        cat = f.get("category", "?")
-        path = f.get("path", "?")
-        line = f.get("line")
-        loc = f"{path}:{line}" if line else str(path)
-        cls = f.get("class") or f.get("advisoryId") or ""
-        sev = f.get("severity") or "MEDIUM"
-        if cat == "SECRET":
-            why = "Хранение секрета в коде/конфигурации повышает риск компрометации при утечке репозитория."
-            steps = [
-                f"Удалите литерал секрета из {loc} и отзовите/ротируйте скомпрометированное значение.",
-                "Вынесите секрет в переменную окружения или защищённое хранилище (Vault / Secrets Manager).",
-            ]
-        elif cat == "SCA":
-            pkg = f"{f.get('group', '')}:{f.get('artifact', '')}@{f.get('version', '')}"
-            why = f"Зависимость {pkg} содержит известную уязвимость {cls}, допускающую атаку через публичный эксплойт."
-            steps = [
-                f"Обновите зависимость {f.get('group', '')}:{f.get('artifact', '')} в {loc} до исправленной версии.",
-                "Зафиксируйте обновлённую версию в gradle.lockfile / build.gradle.kts и перезапустите тесты.",
-            ]
-        else:
-            why = f"Уязвимость типа {cls or 'SAST'} в {loc} нарушает защиту данных или контроль доступа (риск: {sev})."
-            steps = [
-                f"Проверьте участок {loc} и примените безопасный API (параметризованный SQL, строгий CORS/TLS или проверку прав).",
-                "Добавьте модульный/интеграционный тест на отклонённый небезопасный сценарий.",
-            ]
-        items.append(
-            ExplainItem(
-                finding_ref=i,
-                explanation=f"Обнаружена проблема {cat} ({cls}) в {loc}. {why}",
-                risk=sev,
-                fix_steps=steps,
-            )
+    if findings and not kept:
+        meta["errors"].append("no valid explanation items returned")
+
+    has_blocking_error = any(
+        tag in err
+        for err in meta["errors"]
+        for tag in (
+            "schema",
+            "invalid JSON",
+            "empty model response",
+            "secret leak",
+            "empty summary",
+            "no valid explanation items",
         )
-    return ExplainResponse(
-        summary=f"Автоматический отчёт (fallback без LLM): {len(findings)} находок.",
-        items=items,
     )
+    meta["passed"] = (len(kept) > 0 or not findings) and not has_blocking_error
+    return parsed, meta

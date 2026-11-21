@@ -1,4 +1,4 @@
-from app.nodes.ai.validator import validate_llm_response, fallback_report
+from app.nodes.ai.validator import validate_llm_response
 import json
 
 
@@ -45,10 +45,24 @@ def test_invalid_json():
     assert meta["passed"] is False
 
 
-def test_fallback():
-    fb = fallback_report([{"category": "SAST", "path": "x.kt", "class": "sql-injection"}])
-    assert len(fb.items) == 1
-    assert "fallback" in fb.summary.lower() or "Автоматический" in fb.summary
+def test_no_fallback_and_empty_or_leaked_summary_rejected():
+    import app.nodes.ai.validator as validator_mod
+
+    assert not hasattr(validator_mod, "fallback_report")
+
+    parsed_empty, meta_empty = validate_llm_response("", [{"category": "SAST", "path": "x.kt"}])
+    assert parsed_empty is None
+    assert meta_empty["passed"] is False
+
+    findings = [{"category": "SECRET", "path": "a.kt", "class": "api-key", "line": 1}]
+    leaked = json.dumps({
+        "summary": "Leaked key sk-TopSecretValue1234567890",
+        "items": [{"finding_ref": 0, "explanation": "ok", "risk": "HIGH", "fix_steps": ["fix"]}],
+    })
+    parsed_leak, meta_leak = validate_llm_response(leaked, findings)
+    assert parsed_leak is not None
+    assert parsed_leak.summary == ""
+    assert meta_leak["passed"] is False
 
 
 def test_load_known_advisories_and_check(tmp_path):

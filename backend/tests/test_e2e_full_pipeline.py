@@ -111,8 +111,10 @@ def test_full_pipeline_real_scanners_ai_telegram(full_client: TestClient, monkey
     run_id = r.json()["run_id"]
 
     run = full_client.get(f"/api/runs/{run_id}").json()
-    assert run["status"] == "success"
+    assert run["status"] == "partial"
     assert run["ai_report"] is not None
+    assert run["ai_report"]["validation"]["mode"] == "error"
+    assert run["ai_report"]["items"] == []
     assert len(tg_payloads) == 1
     assert "super_secret_api_key_987654321" not in tg_payloads[0]["text"]
 

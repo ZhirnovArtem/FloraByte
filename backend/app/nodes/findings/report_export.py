@@ -1,4 +1,4 @@
-"""findings.export — write report.json (organisers format) + enriched report.md (with optional AI analysis)."""
+"""findings.export — write report.json (organisers format) + enriched report.md (confirmed AI only)."""
 
 from __future__ import annotations
 
@@ -43,14 +43,31 @@ def _extract_ai_report(inputs: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def is_confirmed_ai_report(ai_report: dict[str, Any] | None) -> bool:
+    if not ai_report:
+        return False
+    val = ai_report.get("validation") or {}
+    return val.get("mode") == "llm" and val.get("passed") is True and bool(ai_report.get("items"))
+
+
 def render_markdown(findings: list[Finding], ai_report: dict[str, Any] | None = None) -> str:
     lines = ["# Security findings report", ""]
+    confirmed_ai = is_confirmed_ai_report(ai_report)
+
     if ai_report:
         val = ai_report.get("validation") or {}
-        ai_status = val.get("ai_status") or ("LLM" if val.get("mode") == "llm" else "Fallback")
-        lines.append(f"**AI-анализ:** {ai_status}")
-        if ai_report.get("summary"):
-            lines.append(f"**Общее заключение:** {ai_report['summary']}")
+        mode = val.get("mode")
+        if confirmed_ai:
+            lines.append("**AI-анализ:** Успешно — Gemini успешно обработал результаты сканирования.")
+            if ai_report.get("summary"):
+                lines.append(f"**Общее заключение:** {ai_report['summary']}")
+        elif mode == "empty":
+            lines.append("**AI-анализ:** Нет находок")
+        else:
+            lines.append("**AI-анализ:** Ошибка — AI-анализ не выполнен. Проверьте API-ключ и доступность модели.")
+            err = val.get("error") or (val.get("errors")[0] if isinstance(val.get("errors"), list) and val.get("errors") else "")
+            if err:
+                lines.append(f"**Причина:** {err}")
         lines.append("")
 
     if not findings:
@@ -74,7 +91,7 @@ def render_markdown(findings: list[Finding], ai_report: dict[str, Any] | None = 
         lines.append(f"| {i} | {f.category} | `{f.path}` | {detail} | {line} | {sev} |")
 
     ai_by_ref: dict[int, dict[str, Any]] = {}
-    if ai_report and isinstance(ai_report.get("items"), list):
+    if confirmed_ai and ai_report and isinstance(ai_report.get("items"), list):
         for item in ai_report["items"]:
             if isinstance(item, dict) and isinstance(item.get("finding_ref"), int):
                 ai_by_ref[item["finding_ref"]] = item
@@ -157,11 +174,15 @@ class ReportExportNode(BaseNode):
             "md_path": str(md_path),
         }
         if ai_report:
-            if "summary" in ai_report:
-                out_report["summary"] = ai_report["summary"]
-            if "items" in ai_report:
-                out_report["items"] = ai_report["items"]
+            val = ai_report.get("validation") or {}
+            if is_confirmed_ai_report(ai_report) or val.get("mode") == "empty":
+                out_report["summary"] = ai_report.get("summary", "")
+                out_report["items"] = ai_report.get("items", [])
+            else:
+                # Never propagate unconfirmed/templated AI recommendations on error
+                out_report["summary"] = ""
+                out_report["items"] = []
             if "validation" in ai_report:
-                out_report["validation"] = ai_report["validation"]
+                out_report["validation"] = val
 
         return {"report": out_report}

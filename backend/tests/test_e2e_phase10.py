@@ -98,11 +98,12 @@ def test_e2e_full_rerun_ws_and_restart_persistence(e2e_env):
         json={"name": "phase10-e2e", "graph_json": _build_full_graph(upload_id, dry_run_tg=True)},
     ).json()["id"]
 
-    # Run 1 (LLM unavailable -> deterministic fallback; Telegram dry_run -> safe)
+    # Run 1 (LLM unavailable -> strict AI error, zero fake recommendations, scan findings preserved)
     run1_id = client.post(f"/api/workflows/{wf_id}/run?wait=true").json()["run_id"]
     run1 = client.get(f"/api/runs/{run1_id}").json()
-    assert run1["status"] == "success"
-    assert run1["ai_report"]["validation"]["mode"] == "fallback"
+    assert run1["status"] == "partial"
+    assert run1["ai_report"]["validation"]["mode"] == "error"
+    assert run1["ai_report"]["items"] == []
 
     rep1 = client.get(f"/api/runs/{run1_id}/report.json").json()
     assert {f["category"] for f in rep1["findings"]} == {"SECRET", "SCA", "SAST"}
@@ -179,7 +180,7 @@ def test_e2e_partial_scanner_and_telegram_failures_preserve_reports(e2e_env, mon
     assert by_node["sc3"] == "failed"
     assert by_node["m1"] == "success"
     assert by_node["e1"] == "success"
-    assert by_node["ai1"] == "success"
+    assert by_node["ai1"] == "failed"
     assert by_node["tg1"] == "failed"
 
     # Report from surviving scanners (SECRET + SCA) still preserved!

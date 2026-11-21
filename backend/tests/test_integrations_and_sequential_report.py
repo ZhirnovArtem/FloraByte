@@ -176,7 +176,7 @@ def test_one_time_integrations_and_sequential_ai_export_telegram_pipeline(integ_
 
     run = integ_client.get(f"/api/runs/{run_id}").json()
     assert run["status"] == "success"
-    assert run["ai_report"]["validation"]["ai_status"] == "LLM"
+    assert run["ai_report"]["validation"]["ai_status"] == "Успешно"
 
     # Verify report.json still matches organisers' format
     rep_json = integ_client.get(f"/api/runs/{run_id}/report.json").json()
@@ -185,7 +185,7 @@ def test_one_time_integrations_and_sequential_ai_export_telegram_pipeline(integ_
 
     # Verify report.md includes AI explanations, consequences, and fix steps
     rep_md = integ_client.get(f"/api/runs/{run_id}/report.md").text
-    assert "**AI-анализ:** LLM" in rep_md
+    assert "**AI-анализ:** Успешно" in rep_md
     assert "Пароль хранится открыто в Kotlin-файле." in rep_md
     assert "Компрометация учётных данных." in rep_md
     assert "Перенести секрет в переменные окружения." in rep_md
@@ -203,7 +203,7 @@ def test_one_time_integrations_and_sequential_ai_export_telegram_pipeline(integ_
     assert len(sent_payloads) == 2
 
 
-def test_ai_status_error_vs_fallback(integ_client):
+def test_ai_error_preserves_scan_findings_without_fake_recommendations(integ_client):
     up_id = integ_client.post("/api/uploads", files={"file": ("proj.zip", _sample_zip(), "application/zip")}).json()["upload_id"]
     graph = {
         "nodes": [
@@ -224,17 +224,29 @@ def test_ai_status_error_vs_fallback(integ_client):
     }
     wf_id = integ_client.post("/api/workflows", json={"name": "ai-status", "graph_json": graph}).json()["id"]
 
-    # Case A: No AI key configured -> ai_status == "Fallback"
+    # Case A: No AI key configured -> error mode, zero fake items, scan findings preserved
     r1 = integ_client.post(f"/api/workflows/{wf_id}/run?wait=true").json()["run_id"]
     run1 = integ_client.get(f"/api/runs/{r1}").json()
-    assert run1["ai_report"]["validation"]["ai_status"] == "Fallback"
+    assert run1["status"] == "partial"
+    assert run1["ai_report"]["validation"]["mode"] == "error"
+    assert run1["ai_report"]["validation"]["ai_status"] == "Ошибка"
+    assert run1["ai_report"]["items"] == []
+    assert run1["ai_report"]["summary"] == ""
+    rep1 = integ_client.get(f"/api/runs/{r1}/report.json").json()
+    assert len(rep1["findings"]) == 1
+    md1 = integ_client.get(f"/api/runs/{r1}/report.md").text
+    assert "**AI-анализ:** Ошибка" in md1
+    assert "fallback" not in md1.lower()
 
-    # Case B: AI key configured, but API raises error -> ai_status == "Ошибка"
+    # Case B: AI key configured, but API raises error -> error mode, key redacted
+    bad_key = "AIzaBadKeySecretValue1234567890"
     integ_client.put(
         "/api/integrations/ai",
-        json={"provider": "gemini", "model": "gemini-2.5-flash", "base_url": "", "api_key": "AIzaBadKey1234567890"},
+        json={"provider": "gemini", "model": "gemini-2.5-flash", "base_url": "", "api_key": bad_key},
     )
-    with patch("app.nodes.ai.explain._call_ai_code_checker", new=AsyncMock(side_effect=RuntimeError("403 API key invalid"))):
+    with patch("app.nodes.ai.explain._call_ai_code_checker", new=AsyncMock(side_effect=RuntimeError(f"403 invalid key {bad_key}"))):
         r2 = integ_client.post(f"/api/workflows/{wf_id}/run?wait=true").json()["run_id"]
     run2 = integ_client.get(f"/api/runs/{r2}").json()
     assert run2["ai_report"]["validation"]["ai_status"] == "Ошибка"
+    assert run2["ai_report"]["items"] == []
+    assert bad_key not in str(run2)

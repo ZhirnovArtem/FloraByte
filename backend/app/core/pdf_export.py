@@ -45,17 +45,32 @@ def _build_lines(run_id: str, status: str, findings: list[dict], ai_report: dict
         ("", False),
     ]
 
-    if ai_report and ai_report.get("summary"):
+    val = (ai_report or {}).get("validation") or {}
+    confirmed_ai = bool(
+        ai_report
+        and val.get("mode") == "llm"
+        and val.get("passed") is True
+        and isinstance(ai_report.get("items"), list)
+        and len(ai_report["items"]) > 0
+    )
+
+    if confirmed_ai and ai_report and ai_report.get("summary"):
         lines.append(("AI Executive Summary", True))
         for wrapped in textwrap.wrap(str(ai_report.get("summary")), width=90):
             lines.append((wrapped, False))
-        val = ai_report.get("validation") or {}
-        ai_status = val.get("ai_status") or val.get("mode", "unknown")
-        lines.append((f"AI Status: {ai_status} (mode={val.get('mode', 'unknown')} passed={val.get('passed')})", False))
+        ai_status = val.get("ai_status") or "Успешно"
+        lines.append((f"AI Status: {ai_status} (mode={val.get('mode', 'llm')} passed={val.get('passed')})", False))
+        lines.append(("", False))
+    elif ai_report and val.get("mode") == "error":
+        lines.append(("AI Analysis Error", True))
+        lines.append(("AI-analiz ne vypolnen. Proverte API-klyuch i dostupnost modeli.", False))
+        if val.get("error"):
+            for wrapped in textwrap.wrap(str(val["error"]), width=90):
+                lines.append((wrapped, False))
         lines.append(("", False))
 
     ai_by_ref: dict[int, dict] = {}
-    if ai_report and isinstance(ai_report.get("items"), list):
+    if confirmed_ai and ai_report and isinstance(ai_report.get("items"), list):
         for item in ai_report["items"]:
             if isinstance(item, dict) and isinstance(item.get("finding_ref"), int):
                 ai_by_ref[item["finding_ref"]] = item
