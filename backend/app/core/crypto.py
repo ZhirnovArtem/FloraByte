@@ -7,7 +7,11 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
-_KEY_FILE = Path(os.environ.get("APP_SECRET_KEY_FILE", "/tmp/ai_security_workflow_secret.key"))
+def _key_file_path() -> Path:
+    custom = os.environ.get("APP_SECRET_KEY_FILE", "").strip()
+    if custom:
+        return Path(custom)
+    return Path.home() / ".florabyte" / "secret.key"
 
 
 def _load_or_create_key() -> bytes:
@@ -23,14 +27,15 @@ def _load_or_create_key() -> bytes:
             ) from e
         return raw
 
-    if _KEY_FILE.exists():
-        return _KEY_FILE.read_bytes().strip()
+    key_file = _key_file_path()
+    if key_file.exists():
+        return key_file.read_bytes().strip()
 
     key = Fernet.generate_key()
-    _KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _KEY_FILE.write_bytes(key)
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.write_bytes(key)
     try:
-        _KEY_FILE.chmod(0o600)
+        key_file.chmod(0o600)
     except OSError:
         pass
     return key

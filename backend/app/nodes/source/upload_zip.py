@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import shutil
+import asyncio
 import re
+import shutil
 import uuid
 import zipfile
 from pathlib import Path
@@ -17,11 +18,12 @@ from app.nodes.registry import register_node
 
 MAX_ZIP_BYTES = 50 * 1024 * 1024  # 50 MB
 MAX_FILES = 5000
+MAX_COMPRESSION_RATIO = 100
+UNPACK_TIMEOUT_SEC = 15.0
 
 
 def find_gradle_root(base: Path) -> Path:
     """Find directory containing settings.gradle.kts or build.gradle.kts nearest to base."""
-    # Prefer deepest settings.gradle.kts under base
     candidates: list[Path] = []
     for p in base.rglob("settings.gradle.kts"):
         candidates.append(p.parent)
@@ -33,7 +35,6 @@ def find_gradle_root(base: Path) -> Path:
         candidates.append(p.parent)
     if not candidates:
         return base
-    # Prefer path that looks like training-project or shortest relative that still has src
     candidates = sorted(set(candidates), key=lambda x: (len(x.parts), str(x)))
     for c in candidates:
         if (c / "src").is_dir() or (c / "build.gradle.kts").exists() or (c / "settings.gradle.kts").exists():
@@ -41,35 +42,70 @@ def find_gradle_root(base: Path) -> Path:
     return candidates[0]
 
 
+def stat_is_symlink(info: zipfile.ZipInfo) -> bool:
+    # Unix symlink: external_attr high bits
+    return (info.external_attr >> 16) & 0o170000 == 0o120000
+
+
 def safe_extract(zf: zipfile.ZipFile, dest: Path) -> None:
-    """Extract zip with zip-slip protection, size and file count limits."""
+    """Extract zip with zip-slip, symlink, zip-bomb ratio and actual byte-count limits."""
+    dest_resolved = dest.resolve()
     total_size = 0
     count = 0
+
     for info in zf.infolist():
         if stat_is_symlink(info):
             raise ValueError(f"Symlinks not allowed: {info.filename}")
         count += 1
         if count > MAX_FILES:
             raise ValueError(f"Zip contains too many files (>{MAX_FILES})")
-        # zip-slip
+
         member = info.filename.replace("\\", "/")
-        # Reject absolute paths, traversal and odd Windows drive letters.
-        if member.startswith("/") or any(part in ("..", "") for part in member.split("/")) or re.match(r"^[A-Za-z]:", member):
+        is_dir = member.endswith("/") or info.is_dir()
+        clean_member = member.rstrip("/")
+        if not clean_member:
+            continue
+
+        # Reject absolute paths, traversal, empty path segments, and Windows drive letters.
+        if (
+            clean_member.startswith("/")
+            or any(part in ("..", "") for part in clean_member.split("/"))
+            or re.match(r"^[A-Za-z]:", clean_member)
+        ):
             raise ValueError(f"Zip-slip: unsafe archive member: {info.filename}")
-        target = (dest / member).resolve()
-        if not target.is_relative_to(dest.resolve()):
+
+        target = (dest / clean_member).resolve()
+        if not target.is_relative_to(dest_resolved):
             raise ValueError(f"Zip-slip detected: {info.filename}")
+
         if info.file_size > MAX_ZIP_BYTES:
             raise ValueError(f"File too large in zip: {info.filename}")
-        total_size += info.file_size
-        if total_size > MAX_ZIP_BYTES:
-            raise ValueError(f"Uncompressed size exceeds {MAX_ZIP_BYTES} bytes")
-    zf.extractall(dest)
+        if (
+            info.compress_size > 0
+            and info.file_size > 1024 * 1024
+            and (info.file_size / info.compress_size) > MAX_COMPRESSION_RATIO
+        ):
+            raise ValueError(f"Zip bomb detected (excessive compression ratio): {info.filename}")
+
+        if is_dir:
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(info, "r") as src_stream, target.open("wb") as out_stream:
+            while True:
+                chunk = src_stream.read(65536)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > MAX_ZIP_BYTES:
+                    raise ValueError(f"Uncompressed size exceeds {MAX_ZIP_BYTES} bytes")
+                out_stream.write(chunk)
 
 
-def stat_is_symlink(info: zipfile.ZipInfo) -> bool:
-    # Unix symlink: external_attr high bits
-    return (info.external_attr >> 16) & 0o170000 == 0o120000
+def _unpack_archive(upload_path: Path, extract_dir: Path) -> None:
+    with zipfile.ZipFile(upload_path, "r") as zf:
+        safe_extract(zf, extract_dir)
 
 
 class Params(BaseModel):
@@ -102,15 +138,23 @@ class UploadZipNode(BaseNode):
             shutil.rmtree(extract_dir)
         extract_dir.mkdir(parents=True)
 
-        with zipfile.ZipFile(upload_path, "r") as zf:
-            safe_extract(zf, extract_dir)
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(_unpack_archive, upload_path, extract_dir),
+                timeout=UNPACK_TIMEOUT_SEC,
+            )
+        except Exception:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+            raise
 
         root = extract_dir
         if params.subdir:
             root = (extract_dir / params.subdir).resolve()
             if not root.is_relative_to(extract_dir.resolve()):
+                shutil.rmtree(extract_dir, ignore_errors=True)
                 raise ValueError("subdir must remain inside the uploaded archive")
             if not root.is_dir():
+                shutil.rmtree(extract_dir, ignore_errors=True)
                 raise FileNotFoundError(f"subdir not found in archive: {params.subdir}")
 
         gradle_root = find_gradle_root(root)
