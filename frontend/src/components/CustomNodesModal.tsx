@@ -98,8 +98,17 @@ export default function CustomNodesModal({
       try {
         const list = await api.listCustomNodes();
         if (!cancelled) setNodes(list);
-      } catch {
-        // ignore initial fetch errors
+      } catch (err) {
+        if (!cancelled) {
+          const text = err instanceof Error ? err.message : String(err);
+          if (text.toLowerCase().includes('not found')) {
+            setMsg(
+              '❌ Backend-эндпоинт /api/custom-nodes не найден (404): фронтенд обновлён, но на сервере запущена старая версия Backend. Проверьте деплой и наличие APP_SECRET_KEY в Render Environment Variables.',
+            );
+          } else {
+            setMsg(`❌ ${text}`);
+          }
+        }
       }
     })();
     return () => {
