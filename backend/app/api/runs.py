@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timezone
 from pathlib import Path
 from typing import Optional
 
@@ -9,7 +10,7 @@ from sqlmodel import Session, select
 
 from app.core.auth import check_owner, get_current_user
 from app.core.db import get_session
-from app.core.models import NodeRun, Run, User
+from app.core.models import Finding, NodeRun, Run, User
 from app.core.pdf_export import render_report_pdf
 from app.core.run_analytics import (
     build_severity_dashboard,
@@ -17,8 +18,17 @@ from app.core.run_analytics import (
     deduplicate_across_runs,
     load_run_findings,
 )
+from app.nodes.findings.report_export import render_markdown
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
+
+
+def _duration_ms(r: Run) -> int | None:
+    if not r.started_at or not r.finished_at:
+        return None
+    st = r.started_at if r.started_at.tzinfo else r.started_at.replace(tzinfo=timezone.utc)
+    fin = r.finished_at if r.finished_at.tzinfo else r.finished_at.replace(tzinfo=timezone.utc)
+    return max(0, int((fin - st).total_seconds() * 1000))
 
 
 def _run_dict(r: Run, node_runs: list[NodeRun] | None = None) -> dict:
@@ -29,6 +39,7 @@ def _run_dict(r: Run, node_runs: list[NodeRun] | None = None) -> dict:
         "trigger": r.trigger,
         "started_at": r.started_at.isoformat() if r.started_at else None,
         "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+        "duration_ms": _duration_ms(r),
         "summary": r.summary_json,
         "ai_report": r.ai_report_json,
     }
@@ -180,6 +191,18 @@ def get_report_md(
     p = get_settings().runs_dir / run_id / "reports" / "report.md"
     if p.exists():
         return FileResponse(p, media_type="text/markdown", filename="report.md")
+    raw_findings = load_run_findings(r)
+    if raw_findings or r.ai_report_json:
+        parsed_findings = []
+        for item in raw_findings:
+            try:
+                parsed_findings.append(Finding.model_validate(item))
+            except Exception:
+                pass
+        return PlainTextResponse(
+            render_markdown(parsed_findings, ai_report=r.ai_report_json),
+            media_type="text/markdown",
+        )
     return PlainTextResponse("Находок нет.\n")
 
 

@@ -644,17 +644,39 @@ export default function ReportPanel({
                       <th style={{ padding: '6px 8px' }}>Статус</th>
                       <th style={{ padding: '6px 8px' }}>Триггер</th>
                       <th style={{ padding: '6px 8px' }}>Находок</th>
+                      <th style={{ padding: '6px 8px' }}>AI-анализ</th>
+                      <th style={{ padding: '6px 8px' }}>Длительность</th>
                       <th style={{ padding: '6px 8px' }}>Запущен</th>
                       <th style={{ padding: '6px 8px' }}>Действие</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {runsHistory.map((item) => (
+                    {runsHistory.map((item) => {
+                      const aiMode = item.ai_report?.validation?.mode;
+                      const aiLabel =
+                        aiMode === 'llm' && item.ai_report?.validation?.passed
+                          ? 'Успешно'
+                          : aiMode === 'error'
+                            ? 'Ошибка'
+                            : aiMode === 'empty'
+                              ? 'Нет находок'
+                              : '—';
+                      const dur =
+                        typeof item.duration_ms === 'number'
+                          ? item.duration_ms >= 1000
+                            ? `${(item.duration_ms / 1000).toFixed(1)} с`
+                            : `${item.duration_ms} мс`
+                          : '—';
+                      return (
                       <tr key={item.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                         <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{item.id.slice(0, 8)}</td>
-                        <td style={{ padding: '6px 8px', fontWeight: 700 }}>{item.status}</td>
+                        <td style={{ padding: '6px 8px', fontWeight: 700 }} title={item.summary?.error || ''}>
+                          {item.status}
+                        </td>
                         <td style={{ padding: '6px 8px' }}>{item.trigger}</td>
                         <td style={{ padding: '6px 8px' }}>{item.summary?.report?.findings_count ?? '—'}</td>
+                        <td style={{ padding: '6px 8px' }}>{aiLabel}</td>
+                        <td style={{ padding: '6px 8px' }}>{dur}</td>
                         <td style={{ padding: '6px 8px' }}>{item.started_at ? item.started_at.replace('T', ' ').slice(0, 19) : '—'}</td>
                         <td style={{ padding: '6px 8px' }}>
                           {onSelectRun && (
@@ -680,7 +702,8 @@ export default function ReportPanel({
                           )}
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               )}

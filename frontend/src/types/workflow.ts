@@ -171,6 +171,7 @@ export type RunDto = {
   trigger: string;
   started_at?: string | null;
   finished_at?: string | null;
+  duration_ms?: number | null;
   summary?: {
     node_statuses?: Record<string, string>;
     report?: {

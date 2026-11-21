@@ -218,11 +218,35 @@ export default function IntegrationsModal({
               <span style={{ fontWeight: 600 }}>Провайдер</span>
               <select
                 value={provider}
-                onChange={(e) => setProvider(e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setProvider(next);
+                  if (next === 'ollama') {
+                    if (!baseUrl || baseUrl.includes(':8000') || baseUrl.includes('googleapis')) {
+                      setBaseUrl('http://localhost:11434/v1');
+                    }
+                    if (!model || model.startsWith('gemini') || model.startsWith('Qwen/')) {
+                      setModel('llama3.2');
+                    }
+                  } else if (next === 'vllm') {
+                    if (!baseUrl || baseUrl.includes(':11434') || baseUrl.includes('googleapis')) {
+                      setBaseUrl('http://localhost:8000/v1');
+                    }
+                    if (!model || model.startsWith('gemini') || model === 'llama3.2') {
+                      setModel('Qwen/Qwen2.5-7B-Instruct');
+                    }
+                  } else if (next === 'gemini') {
+                    if (!model || model === 'llama3.2' || model.startsWith('Qwen/')) {
+                      setModel('gemini-2.5-flash');
+                    }
+                  }
+                }}
                 style={{ width: '100%', padding: '6px 8px', marginTop: 4, borderRadius: 6, border: '1px solid #cbd5e1' }}
               >
-                <option value="gemini">Google Gemini (нативный)</option>
-                <option value="openai_compatible">OpenAI-compatible / Ollama / vLLM</option>
+                <option value="gemini">Google Gemini (облако)</option>
+                <option value="ollama">Ollama (локальная / закрытый контур)</option>
+                <option value="vllm">vLLM (локальная / закрытый контур)</option>
+                <option value="openai_compatible">OpenAI-compatible API</option>
               </select>
             </label>
 
@@ -232,21 +256,24 @@ export default function IntegrationsModal({
                 type="text"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                placeholder="gemini-2.5-flash"
+                placeholder={provider === 'ollama' ? 'llama3.2' : provider === 'vllm' ? 'Qwen/Qwen2.5-7B-Instruct' : 'gemini-2.5-flash'}
                 style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', marginTop: 4, borderRadius: 6, border: '1px solid #cbd5e1' }}
               />
             </label>
 
-            {provider === 'openai_compatible' && (
+            {provider !== 'gemini' && (
               <label style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>
-                <span style={{ fontWeight: 600 }}>Base URL</span>
+                <span style={{ fontWeight: 600 }}>Base URL (закрытый контур / localhost)</span>
                 <input
                   type="text"
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder="http://localhost:11434/v1"
+                  placeholder={provider === 'vllm' ? 'http://localhost:8000/v1' : 'http://localhost:11434/v1'}
                   style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', marginTop: 4, borderRadius: 6, border: '1px solid #cbd5e1' }}
                 />
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
+                  Для локальных Ollama/vLLM в закрытом контуре API-ключ не обязателен.
+                </div>
               </label>
             )}
 

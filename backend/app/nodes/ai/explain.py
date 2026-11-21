@@ -18,6 +18,13 @@ from app.core.crypto import decrypt
 from app.core.db import get_engine
 from app.core.masking import mask_evidence, redact_text
 from app.core.models import Credential, Finding, IntegrationSetting
+from app.nodes.ai.llm_client import (
+    DEFAULT_PROVIDER_MODELS,
+    OPENAI_STYLE_PROVIDERS,
+    SUPPORTED_LLM_PROVIDERS,
+    is_private_or_local_url,
+    resolve_base_url,
+)
 from app.nodes.ai.validator import load_known_advisories, validate_llm_response
 from app.nodes.base import BaseNode, NodeContext, Port
 from app.nodes.registry import register_node
@@ -35,7 +42,7 @@ AI_ERROR_USER_MESSAGE = "AI-анализ не выполнен. Проверьт
 class Params(BaseModel):
     credential_id: str = Field("", description="LLM credential id (preferred)")
     model: str = Field("", description="Optional model name override")
-    provider: str = Field("", description="gemini or openai_compatible (defaults to LLM_PROVIDER)")
+    provider: str = Field("", description="gemini | ollama | vllm | openai_compatible (defaults to LLM_PROVIDER)")
     base_url: str = Field("", description="Optional OpenAI-compatible base_url (e.g. Ollama http://localhost:11434/v1)")
 
 
@@ -109,11 +116,14 @@ def _validate_api_key_format(api_key: str | None, provider: str, base_url: str) 
             raise RuntimeError("Некорректный формат API-ключа Gemini. Проверьте настройки интеграции.")
         return
 
-    if not api_key or not api_key.strip():
-        from urllib.parse import urlsplit
+    # Local / closed-loop LLM providers (ollama, vllm) work without API key in private infrastructure
+    if provider in ("ollama", "vllm"):
+        if not base_url or not base_url.strip():
+            raise RuntimeError(f"Не указан URL для локального провайдера {provider}.")
+        return
 
-        host = (urlsplit(base_url).hostname or "").lower()
-        if host not in ("localhost", "127.0.0.1", "::1"):
+    if not api_key or not api_key.strip():
+        if not is_private_or_local_url(base_url):
             raise RuntimeError("Отсутствует API-ключ для удалённой OpenAI-compatible модели.")
 
 
@@ -243,6 +253,7 @@ async def _call_openai_compatible(
     api_key: str | None,
     model: str | None,
     base_url: str | None = None,
+    provider: str = "openai_compatible",
 ) -> str:
     """JSON-only response from OpenAI-style local/cloud models (Ollama, vLLM, Gemini OpenAI); validated after call."""
     from app.nodes.ai.llm_client import chat_completion
@@ -267,6 +278,7 @@ async def _call_openai_compatible(
         model=model,
         api_key=api_key,
         base_url=base_url,
+        provider=provider,
     )
     cleaned = text.strip()
     if cleaned.startswith("```"):
@@ -281,6 +293,7 @@ class AiExplainNode(BaseNode):
     type = "ai.explain"
     label = "AI Explain"
     group = "ai"
+    continue_downstream_on_error = True
     inputs = [
         Port(name="findings", kind="Findings"),
         Port(name="in", kind="Findings"),
@@ -320,23 +333,23 @@ class AiExplainNode(BaseNode):
         key, model, base_url, provider_override = _resolve_gemini_config(params, owner_id=ctx.owner_id)
         settings = get_settings()
         provider = (provider_override or settings.llm_provider).strip().lower()
-        effective_base = base_url or settings.llm_base_url
-        if not model:
-            model = settings.llm_model if provider == "openai_compatible" else None
+        effective_base = resolve_base_url(provider, base_url)
+        if not model and provider in OPENAI_STYLE_PROVIDERS:
+            model = DEFAULT_PROVIDER_MODELS.get(provider) or settings.llm_model
         known_advisories = load_known_advisories(settings.vuln_db_path)
 
         parsed = None
         error_msg: str | None = None
         try:
-            if provider not in ("gemini", "openai_compatible"):
-                raise ValueError("LLM_PROVIDER должен быть 'gemini' или 'openai_compatible'.")
+            if provider not in SUPPORTED_LLM_PROVIDERS:
+                raise ValueError("LLM_PROVIDER должен быть 'gemini', 'ollama', 'vllm' или 'openai_compatible'.")
 
             # Stage 2 step 1 & 2: strict key presence & format check before any call
             _validate_api_key_format(key, provider, effective_base)
 
             async def _invoke() -> str:
-                if provider == "openai_compatible":
-                    return await _call_openai_compatible(findings, key, model, effective_base)
+                if provider in OPENAI_STYLE_PROVIDERS:
+                    return await _call_openai_compatible(findings, key, model, effective_base, provider=provider)
                 res = await _call_ai_code_checker(findings, key or "", model)
                 return json.dumps(res, ensure_ascii=False)
 

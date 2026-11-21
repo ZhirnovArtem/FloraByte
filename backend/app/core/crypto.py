@@ -14,6 +14,11 @@ def _key_file_path() -> Path:
     return Path.home() / ".florabyte" / "secret.key"
 
 
+def encryption_key_source() -> str:
+    """Return 'env' when APP_SECRET_KEY is configured in environment, otherwise 'file'."""
+    return "env" if os.environ.get("APP_SECRET_KEY", "").strip() else "file"
+
+
 def _load_or_create_key() -> bytes:
     env_key = os.environ.get("APP_SECRET_KEY", "").strip()
     if env_key:

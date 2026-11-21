@@ -13,7 +13,7 @@ _TOKEN_PATTERNS: list[Pattern[str]] = [
     re.compile(r"sk-[A-Za-z0-9]{20,}"),
     re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
     re.compile(r"AIza[0-9A-Za-z\-_]{20,}"),
-    re.compile(r"[0-9]{8,10}:[A-Za-z0-9_\-]{30,}"),  # Telegram-like
+    re.compile(r"(?:bot)?[0-9]{5,15}:[A-Za-z0-9_\-]{20,}"),  # Telegram Bot API token (with or without 'bot' prefix)
 ]
 
 

@@ -26,6 +26,7 @@ from app.api.workflows import router as workflows_router
 from app.api.ws import router as ws_router
 from app.config import get_settings
 from app.core.auth import SESSION_COOKIE_NAME, resolve_session_from_token
+from app.core.crypto import encryption_key_source
 from app.core.db import get_engine, init_db
 from app.core.logging import setup_logging
 from app.engine.scheduler import reload_schedules, set_run_callback, start_scheduler
@@ -35,6 +36,11 @@ from app.engine.scheduler import reload_schedules, set_run_callback, start_sched
 async def lifespan(app: FastAPI):
     setup_logging()
     get_settings()
+    if encryption_key_source() != "env":
+        import logging
+        logging.getLogger(__name__).warning(
+            "APP_SECRET_KEY is not set in environment; using local file key (configure APP_SECRET_KEY for persistent deployments)."
+        )
     init_db()
 
     # wire scheduler → executor
@@ -150,4 +156,9 @@ async def protect_workflow_api(request: Request, call_next):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "phase": "F", "version": "1.0.0"}
+    return {
+        "status": "ok",
+        "phase": "F",
+        "version": "1.0.0",
+        "secret_key_source": encryption_key_source(),
+    }

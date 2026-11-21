@@ -36,6 +36,7 @@ class BaseNode(ABC):
     inputs: ClassVar[list[Port]] = []
     outputs: ClassVar[list[Port]] = []
     Params: ClassVar[type[BaseModel]] = BaseModel
+    continue_downstream_on_error: ClassVar[bool] = False
 
     @abstractmethod
     async def run(

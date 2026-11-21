@@ -157,12 +157,18 @@ class Executor:
         active_ports: dict[str, set[str]] = {}
         node_status: dict[str, str] = {nid: "pending" for nid in nodes}
 
-        # For skipped propagation: edge is active if source succeeded (or ai.explain degraded gracefully to error report)
+        # For skipped propagation: edge is active if source succeeded or declares continue_downstream_on_error
         def edge_active(e: dict) -> bool:
             src = e["source"]
-            src_type = (nodes.get(src) or {}).get("type")
             if node_status.get(src) != "success":
-                if not (src_type == "ai.explain" and src in outputs):
+                src_type = (nodes.get(src) or {}).get("type")
+                allow_err = False
+                if src_type and src in outputs:
+                    try:
+                        allow_err = bool(get_node_class(src_type).continue_downstream_on_error)
+                    except KeyError:
+                        allow_err = False
+                if not allow_err:
                     return False
             ports = active_ports.get(src)
             if not ports:
@@ -262,20 +268,20 @@ class Executor:
                 duration_ms = int((finished - started).total_seconds() * 1000)
                 preview = _preview(result)
 
-                # If ai.explain returned an error report, record node as failed while letting
-                # downstream findings.export still persist the scan findings without fake AI items.
-                ai_err = None
-                if node["type"] == "ai.explain" and isinstance(result.get("report"), dict):
+                # If a node with continue_downstream_on_error returned an error report, record node as failed
+                # while still propagating its output downstream (e.g. scan findings to Export Report).
+                node_err = None
+                if cls.continue_downstream_on_error and isinstance(result.get("report"), dict):
                     val = result["report"].get("validation") or {}
                     if val.get("mode") == "error":
-                        ai_err = str(val.get("error") or "AI-анализ не выполнен. Проверьте API-ключ и доступность модели.")
+                        node_err = str(val.get("error") or "Узел завершился с ошибкой.")
 
-                if ai_err:
+                if node_err:
                     node_status[node_id] = "failed"
                     await self._mark_node(
                         run_id, node_id, "failed",
                         started_at=started, finished_at=finished,
-                        output_preview=preview, error=ai_err,
+                        output_preview=preview, error=node_err,
                     )
                     await event_bus.emit(
                         run_id,
@@ -285,7 +291,7 @@ class Executor:
                             "status": "failed",
                             "duration_ms": duration_ms,
                             "output_preview": preview,
-                            "error": ai_err,
+                            "error": node_err,
                         },
                     )
                 else:

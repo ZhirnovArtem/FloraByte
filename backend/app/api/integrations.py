@@ -19,6 +19,14 @@ from app.core.db import get_session
 from app.core.masking import mask_secret, redact_text
 from app.core.models import IntegrationSetting, Run, User
 from app.core.run_analytics import load_run_findings
+from app.nodes.ai.llm_client import (
+    DEFAULT_PROVIDER_MODELS,
+    OPENAI_STYLE_PROVIDERS,
+    SUPPORTED_LLM_PROVIDERS,
+    is_private_or_local_url,
+    resolve_base_url,
+    verify_openai_compatible_connection,
+)
 from app.nodes.notify.telegram import (
     _format_message,
     normalize_bot_token,
@@ -83,29 +91,33 @@ def _read_ai_status(session: Session, user: Optional[User] = None) -> dict[str, 
             except Exception:
                 saved_key = ""
         effective_key = saved_key or env_key
-        provider = str(cfg.get("provider") or settings.llm_provider or "gemini")
-        base_url = str(cfg.get("base_url") or settings.llm_base_url or "")
-        is_local = (
-            provider == "openai_compatible"
-            and (urlsplit(base_url).hostname or "").lower() in ("localhost", "127.0.0.1", "::1")
+        provider = str(cfg.get("provider") or settings.llm_provider or "gemini").strip().lower()
+        base_url = resolve_base_url(provider, str(cfg.get("base_url") or settings.llm_base_url or ""))
+        is_local = provider in ("ollama", "vllm") or (
+            provider == "openai_compatible" and is_private_or_local_url(base_url)
         )
         return {
             "configured": bool(effective_key or is_local),
             "enabled": row.enabled,
             "source": "settings" if saved_key else ("env" if env_key else ("local" if is_local else "none")),
             "provider": provider,
-            "model": str(cfg.get("model") or os.getenv("GEMINI_MODEL", "") or "gemini-2.5-flash"),
+            "model": str(cfg.get("model") or DEFAULT_PROVIDER_MODELS.get(provider) or os.getenv("GEMINI_MODEL", "") or "gemini-2.5-flash"),
             "base_url": base_url,
             "api_key_preview": mask_secret(effective_key, keep_last=4) if effective_key else "",
         }
 
+    default_provider = (settings.llm_provider or "gemini").strip().lower()
+    default_base = resolve_base_url(default_provider, settings.llm_base_url)
+    is_default_local = default_provider in ("ollama", "vllm") or (
+        default_provider == "openai_compatible" and is_private_or_local_url(default_base)
+    )
     return {
-        "configured": bool(env_key),
-        "enabled": bool(env_key),
-        "source": "env" if env_key else "none",
-        "provider": settings.llm_provider or "gemini",
-        "model": os.getenv("GEMINI_MODEL", "").strip() or settings.llm_model or "gemini-2.5-flash",
-        "base_url": settings.llm_base_url or "",
+        "configured": bool(env_key or is_default_local),
+        "enabled": bool(env_key or is_default_local),
+        "source": "env" if env_key else ("local" if is_default_local else "none"),
+        "provider": default_provider,
+        "model": os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_PROVIDER_MODELS.get(default_provider) or settings.llm_model or "gemini-2.5-flash",
+        "base_url": default_base,
         "api_key_preview": mask_secret(env_key, keep_last=4) if env_key else "",
     }
 
@@ -167,8 +179,8 @@ def save_ai_integration(
     user: Optional[User] = Depends(get_current_user),
 ):
     provider = body.provider.strip().lower() or "gemini"
-    if provider not in ("gemini", "openai_compatible"):
-        raise HTTPException(400, "provider must be 'gemini' or 'openai_compatible'")
+    if provider not in SUPPORTED_LLM_PROVIDERS:
+        raise HTTPException(400, "provider must be gemini, ollama, vllm, or openai_compatible")
 
     key = _integ_key(user, "ai")
     row = session.get(IntegrationSetting, key)
@@ -182,8 +194,8 @@ def save_ai_integration(
     row.encrypted_secret = secret
     row.config_json = {
         "provider": provider,
-        "model": body.model.strip() or "gemini-2.5-flash",
-        "base_url": body.base_url.strip(),
+        "model": body.model.strip() or DEFAULT_PROVIDER_MODELS.get(provider) or "gemini-2.5-flash",
+        "base_url": resolve_base_url(provider, body.base_url) if provider in OPENAI_STYLE_PROVIDERS else body.base_url.strip(),
     }
     row.updated_at = datetime.now(timezone.utc)
     session.add(row)
@@ -255,24 +267,10 @@ async def test_ai_integration(
         except Exception as exc:
             return {"ok": False, "provider": provider, "model": model, "detail": redact_text(str(exc), [key])}
 
-    # openai_compatible
-    target_base = base_url.rstrip("/")
-    if not target_base:
-        return {"ok": False, "detail": "Не указан base_url для OpenAI-compatible провайдера."}
-    headers = {"Authorization": f"Bearer {key}"} if key else {}
-    try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            resp = await client.get(f"{target_base}/models", headers=headers)
-        if resp.status_code == 200:
-            return {"ok": True, "provider": provider, "model": model, "detail": "Подключение к OpenAI-compatible API подтверждено."}
-        return {
-            "ok": False,
-            "provider": provider,
-            "model": model,
-            "detail": redact_text(f"API вернул HTTP {resp.status_code}", [key] if key else None),
-        }
-    except Exception as exc:
-        return {"ok": False, "provider": provider, "model": model, "detail": redact_text(str(exc), [key] if key else None)}
+    # ollama / vllm / openai_compatible
+    target_base = resolve_base_url(provider, base_url)
+    res = await verify_openai_compatible_connection(target_base, model=model, api_key=key)
+    return {"provider": provider, "model": model, **res}
 
 
 @router.delete("/ai")
