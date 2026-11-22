@@ -48,3 +48,37 @@ def test_version_comparison_with_zero_and_prerelease():
     assert VersionRange.compare("1.0", "1.0.0") == 0
     assert VersionRange.compare("2.15.0-rc1", "2.15.0") < 0
     assert VersionRange.in_range("2.15.0", ">=2.0 <2.15") is False
+
+
+def test_multiline_add_and_gradle_property_resolution():
+    gradle_props = "legacyManifestJsonVersion=20230227\n"
+    build_kts = '''
+val archiveFormatVersion = "1.25.0"
+val manifestVersion = providers.gradleProperty("legacyManifestJsonVersion").get()
+
+dependencies {
+    // implementation("org.apache.logging.log4j:log4j-core:2.14.0")
+    implementation("org.apache.commons:commons-text:1.9")
+    implementation("org.jsoup:jsoup:1.14.1")
+    implementation("org.apache.commons:commons-compress:$archiveFormatVersion")
+    add(
+        "implementation",
+        "commons-net:commons-net:3.8.0",
+    )
+    implementation("org.json:json:$manifestVersion")
+}
+'''
+    parser = GradleDependencyParser()
+    vars_all = parser.variables([build_kts, gradle_props])
+    deps = parser.parse(build_kts, "build.gradle.kts", variables=vars_all)
+    coords = {f"{d.package_name}:{d.version}": d for d in deps}
+    assert set(coords) == {
+        "org.apache.commons:commons-text:1.9",
+        "org.jsoup:jsoup:1.14.1",
+        "org.apache.commons:commons-compress:1.25.0",
+        "commons-net:commons-net:3.8.0",
+        "org.json:json:20230227",
+    }
+    assert "org.apache.logging.log4j:log4j-core:2.14.0" not in coords
+    assert coords["commons-net:commons-net:3.8.0"].line > coords["org.apache.commons:commons-compress:1.25.0"].line
+

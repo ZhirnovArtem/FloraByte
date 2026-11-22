@@ -51,16 +51,18 @@ class ScaScanner(SecurityScanner):
         findings: list[Finding] = []
         declared_packages: set[str] = set()
         for f in gradle_files:
-            deps = self._parser.parse(f.content, f.path, variables=variables, aliases=aliases)
+            norm_path = f.path.replace("\\", "/").lstrip("./")
+            deps = self._parser.parse(f.content, norm_path, variables=variables, aliases=aliases)
             for dep in deps:
                 declared_packages.add(dep.package_name)
                 if self._lockfile_priority and dep.package_name in locked:
                     dep = GradleDependency(dep.configuration, dep.group, dep.artifact, locked[dep.package_name].version, dep.line)
-                findings.extend(self._check_dependencies([dep], f.path))
+                findings.extend(self._check_dependencies([dep], norm_path))
         # Lock-only coordinates are still concrete resolved dependencies.
         for package, dep in locked.items():
             if package not in declared_packages:
-                findings.extend(self._check_dependencies([dep], locked_paths[package]))
+                norm_lock_path = locked_paths[package].replace("\\", "/").lstrip("./")
+                findings.extend(self._check_dependencies([dep], norm_lock_path))
 
         seen: set[str] = set()
         deduped: list[Finding] = []

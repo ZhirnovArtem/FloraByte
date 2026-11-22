@@ -77,7 +77,7 @@ def match_sca(pred: dict, truth: dict) -> bool:
     truth_ids = set(truth.get("advisoryIds") or [])
     if truth.get("advisoryId"):
         truth_ids.add(truth["advisoryId"])
-    return advisory in truth_ids or advisory == truth.get("advisoryId")
+    return advisory in truth_ids or advisory == truth.get("advisoryId") if truth_ids or truth.get("advisoryId") else True
 
 
 def match_one(pred: dict, truth: dict) -> bool:

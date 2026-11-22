@@ -68,6 +68,47 @@ def test_sca_adapter_supports_organisers_db_schema(tmp_path: Path):
     assert findings[0].advisoryId == "CVE-2022-42889"
 
 
+def test_sca_training_project_finds_all_five_with_default_bundled_db(tmp_path: Path):
+    (tmp_path / "gradle.properties").write_text("legacyManifestJsonVersion=20230227\n", encoding="utf-8")
+    (tmp_path / "build.gradle.kts").write_text(
+        '''
+val archiveFormatVersion = "1.25.0"
+val manifestVersion = providers.gradleProperty("legacyManifestJsonVersion").get()
+
+dependencies {
+    implementation("org.apache.commons:commons-text:1.9")
+    implementation("org.jsoup:jsoup:1.14.1")
+    implementation("org.apache.commons:commons-compress:$archiveFormatVersion")
+    add(
+        "implementation",
+        "commons-net:commons-net:3.8.0",
+    )
+    implementation("org.json:json:$manifestVersion")
+    implementation("org.apache.commons:commons-lang3:3.20.0")
+}
+''',
+        encoding="utf-8",
+    )
+
+    findings = sca.scan(tmp_path, {})
+    by_pkg = {f"{f.group}:{f.artifact}:{f.version}": f for f in findings}
+    assert set(by_pkg) == {
+        "org.apache.commons:commons-text:1.9",
+        "org.jsoup:jsoup:1.14.1",
+        "org.apache.commons:commons-compress:1.25.0",
+        "commons-net:commons-net:3.8.0",
+        "org.json:json:20230227",
+    }
+    assert by_pkg["org.apache.commons:commons-text:1.9"].severity == "CRITICAL"
+    assert by_pkg["org.jsoup:jsoup:1.14.1"].severity == "HIGH"
+    assert by_pkg["org.json:json:20230227"].severity == "HIGH"
+    assert by_pkg["org.apache.commons:commons-compress:1.25.0"].severity == "MEDIUM"
+    assert by_pkg["commons-net:commons-net:3.8.0"].severity == "MEDIUM"
+    for f in findings:
+        assert f.path == "build.gradle.kts"
+        assert isinstance(f.line, int) and f.line > 0
+
+
 def test_sast_adapter_maps_rule_to_organiser_class(tmp_path: Path):
     src = tmp_path / "src" / "main" / "kotlin"
     src.mkdir(parents=True)

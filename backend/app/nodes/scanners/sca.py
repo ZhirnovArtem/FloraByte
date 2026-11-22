@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from security_scanners.core.models import ScanInput, SourceFile  # noqa: E402
 from security_scanners.sca.db import Vulnerability, VulnerabilityDb  # noqa: E402
 from security_scanners.sca.scanner import ScaScanner  # noqa: E402
 
+logger = logging.getLogger(__name__)
 _SKIP_DIRS = {".git", "build", ".gradle", "node_modules", "__pycache__", ".venv", "venv"}
 
 
@@ -50,17 +52,21 @@ def _range_to_affected(rng: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
-def _load_vulnerabilities(vuln_db_path: str | Path | None, root: Path) -> list[Vulnerability]:
+def _load_vulnerabilities(
+    vuln_db_path: str | Path | None,
+    root: Path,
+    *,
+    include_bundled_defaults: bool = False,
+) -> tuple[list[Vulnerability], str]:
     resolved = _resolve_db_path(vuln_db_path, root)
     if resolved is None:
-        return VulnerabilityDb.load_from_resource()
+        return VulnerabilityDb.load_from_resource(), "bundled:security_scanners/sca/vulnerabilities.json"
 
     raw = json.loads(resolved.read_text(encoding="utf-8"))
+    vulns: list[Vulnerability] = []
     if isinstance(raw, list):
-        return [Vulnerability(**item) for item in raw]
-
-    if isinstance(raw, dict) and isinstance(raw.get("vulnerabilities"), list):
-        vulns: list[Vulnerability] = []
+        vulns = [Vulnerability(**item) for item in raw]
+    elif isinstance(raw, dict) and isinstance(raw.get("vulnerabilities"), list):
         for item in raw["vulnerabilities"]:
             group = item.get("group", "")
             artifact = item.get("artifact", "")
@@ -92,9 +98,18 @@ def _load_vulnerabilities(vuln_db_path: str | Path | None, root: Path) -> list[V
                         exploitAvailable=False,
                     )
                 )
-        return vulns
+    else:
+        return VulnerabilityDb.load_from_resource(), "bundled:security_scanners/sca/vulnerabilities.json"
 
-    return VulnerabilityDb.load_from_resource()
+    if include_bundled_defaults:
+        existing_keys = {(v.id, v.packageName, v.affected) for v in vulns}
+        for bv in VulnerabilityDb.load_from_resource():
+            bkey = (bv.id, bv.packageName, bv.affected)
+            if bkey not in existing_keys:
+                vulns.append(bv)
+                existing_keys.add(bkey)
+
+    return vulns, str(resolved)
 
 
 def _collect_gradle_files(root: Path) -> list[SourceFile]:
@@ -118,7 +133,11 @@ def _collect_gradle_files(root: Path) -> list[SourceFile]:
 
 def scan(root: Path, params: dict | None = None) -> list[Finding]:
     params = params or {}
-    vuln_db = _load_vulnerabilities(params.get("vuln_db_path"), root)
+    explicit_db = params.get("vuln_db_path")
+    default_rel = Path("vulnerability-database/vulnerabilities.json")
+    effective_db = explicit_db if explicit_db else str(get_settings().vuln_db_path or default_rel)
+    include_defaults = not bool(explicit_db)
+    vuln_db, db_label = _load_vulnerabilities(effective_db, root, include_bundled_defaults=include_defaults)
     files = _collect_gradle_files(root)
     scanner = ScaScanner(vulnerability_db=vuln_db, lockfile_priority=params.get("lockfile_priority", True))
     result = scanner.scan(ScanInput(repo_path=str(root), files=files))
@@ -144,6 +163,7 @@ def scan(root: Path, params: dict | None = None) -> list[Finding]:
             Finding(
                 category="SCA",
                 path=rel_path,
+                line=f.line,
                 group=group,
                 artifact=artifact,
                 version=version,
@@ -155,6 +175,14 @@ def scan(root: Path, params: dict | None = None) -> list[Finding]:
                 evidence=f.evidence,
             )
         )
+    logger.info(
+        "SCA scan completed: root=%s db=%s rules=%d gradle_files=%d findings=%d",
+        root,
+        db_label,
+        len(vuln_db),
+        len(files),
+        len(out),
+    )
     return out
 
 
@@ -180,7 +208,7 @@ class ScaScannerNode(BaseNode):
         root = Path(root)
         settings = get_settings()
         scan_params = {
-            "vuln_db_path": params.vuln_db_path or str(settings.vuln_db_path),
+            "vuln_db_path": params.vuln_db_path.strip(),
             "lockfile_priority": params.lockfile_priority,
         }
         if settings.use_stub_scanners:
