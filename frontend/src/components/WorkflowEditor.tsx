@@ -25,6 +25,7 @@ import TemplatesModal from './TemplatesModal';
 import { fallbackNodeCatalog } from '../config/nodeCatalog';
 import * as api from '../api/client';
 import { connectionError, safeGraphForLocalStorage } from '../utils/graphValidation';
+import { useBreakpoint } from '../hooks/useMediaQuery';
 import type {
   AuthUserDto,
   BackendGraph,
@@ -272,6 +273,14 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
   const [wsEvents, setWsEvents] = useState<WsRunEvent[]>([]);
   const [runsHistory, setRunsHistory] = useState<RunDto[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
+
+  const breakpoint = useBreakpoint();
+  const isMobile = breakpoint === 'mobile';
+  const isTablet = breakpoint === 'tablet';
+  const [mobileTab, setMobileTab] = useState<'canvas' | 'palette' | 'settings' | 'report'>('canvas');
+  const [tabletDrawer, setTabletDrawer] = useState<'none' | 'palette' | 'settings'>('none');
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+
   const [paletteOpen, setPaletteOpen] = useState<boolean>(() => {
     try {
       return localStorage.getItem(PALETTE_OPEN_KEY) !== 'false';
@@ -312,17 +321,38 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
   }, []);
 
   const openNodePanel = useCallback(() => {
+    if (isMobile) {
+      setMobileTab('settings');
+      return;
+    }
+    if (isTablet) {
+      setTabletDrawer('settings');
+      return;
+    }
     setNodePanelOpen(true);
     try {
       localStorage.setItem(NODE_PANEL_OPEN_KEY, 'true');
     } catch {
       // ignore storage errors
     }
-  }, []);
+  }, [isMobile, isTablet]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const { deleteElements, screenToFlowPosition, fitView } = useReactFlow();
+
+  const switchMobileTab = useCallback(
+    (tab: 'canvas' | 'palette' | 'settings' | 'report') => {
+      setMobileTab(tab);
+      setMoreMenuOpen(false);
+      if (tab === 'canvas') {
+        requestAnimationFrame(() => {
+          void fitView({ padding: 0.2, duration: 220 });
+        });
+      }
+    },
+    [fitView],
+  );
 
   const stopPolling = useCallback(() => {
     if (pollTimerRef.current !== null) {
@@ -526,8 +556,16 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
         },
       };
       setNodes((curr) => [...curr, newNode]);
+      if (isMobile) {
+        setMobileTab('canvas');
+        requestAnimationFrame(() => {
+          void fitView({ padding: 0.2, duration: 220 });
+        });
+      } else if (isTablet) {
+        setTabletDrawer('none');
+      }
     },
-    [setNodes],
+    [fitView, isMobile, isTablet, setNodes],
   );
 
   const onCanvasDragOver = useCallback((e: React.DragEvent) => {
@@ -775,6 +813,7 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
     const list = await api.listWorkflows().catch(() => workflows);
     setWorkflows(list);
     setStatusMsg(`Шаблон скопирован в ваш сценарий «${copied.name}».`);
+    if (isMobile) setMobileTab('canvas');
   };
 
   const openPublishDialog = () => {
@@ -837,6 +876,7 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
       setStatusMsg(
         `Сценарий создан (${modeLabel})${gen.summary ? `: ${gen.summary}` : '.'}`,
       );
+      if (isMobile) setMobileTab('canvas');
       requestAnimationFrame(() => {
         void fitView({ padding: 0.2, duration: 300 });
       });
@@ -865,6 +905,8 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
       const list = await api.listWorkflows().catch(() => workflows);
       setWorkflows(list);
       setStatusMsg(`Шаблон "${tpl.name}" скопирован и открыт.`);
+      if (isMobile) setMobileTab('canvas');
+      else if (isTablet) setTabletDrawer('none');
     } catch {
       const conv = fromBackendGraph(tpl.graph_json, catalog);
       setNodes(conv.nodes);
@@ -872,6 +914,8 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
       setWorkflowId(null);
       setWorkflowName(tpl.name);
       setStatusMsg(`Шаблон "${tpl.name}" открыт локально.`);
+      if (isMobile) setMobileTab('canvas');
+      else if (isTablet) setTabletDrawer('none');
     }
   };
 
@@ -959,6 +1003,7 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
     setReportMd('');
     setIsRunning(true);
     setPanelOpen(true);
+    if (isMobile) setMobileTab('report');
     setStatusMsg('Запуск workflow…');
 
     try {
@@ -973,22 +1018,430 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100vh' }}>
+    <div className="fb-editor-root">
       {/* Верхняя панель управления */}
-      <header
-        style={{
-          minHeight: 54,
-          padding: '6px 14px',
-          background: '#0f172a',
-          color: '#f8fafc',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 10,
-          flexWrap: 'wrap',
-          flexShrink: 0,
-        }}
-      >
+      {isMobile ? (
+        <header
+          style={{
+            padding: '8px 10px',
+            background: '#0f172a',
+            color: '#f8fafc',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            flexShrink: 0,
+            position: 'relative',
+            zIndex: 40,
+          }}
+        >
+          {/* Строка 1: бренд, статус, выбор сценария, меню «Ещё» */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+            <strong style={{ fontSize: 15, flexShrink: 0 }}>FloraByte</strong>
+            <span
+              title={`Вход выполнен как ${user.email}`}
+              style={{
+                padding: '2px 7px',
+                borderRadius: 999,
+                background: '#064e3b',
+                color: '#6ee7b7',
+                border: '1px solid #047857',
+                fontSize: 11,
+                fontWeight: 700,
+                flexShrink: 0,
+              }}
+            >
+              ●
+            </span>
+            <select
+              aria-label="Выбор сценария"
+              value={workflowId ?? ''}
+              onChange={(e) => void loadWorkflowById(e.target.value)}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                minHeight: 38,
+                padding: '6px 8px',
+                borderRadius: 6,
+                border: '1px solid #334155',
+                background: '#1e293b',
+                color: '#fff',
+                fontSize: 13,
+              }}
+            >
+              <option value="">localStorage (черновик)</option>
+              {workflows.map((wf) => (
+                <option key={wf.id} value={wf.id}>
+                  {wf.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setMoreMenuOpen((v) => !v)}
+              aria-expanded={moreMenuOpen}
+              style={{
+                minHeight: 38,
+                padding: '6px 10px',
+                borderRadius: 7,
+                border: '1px solid #475569',
+                background: moreMenuOpen ? '#334155' : '#1e293b',
+                color: '#f8fafc',
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: 'pointer',
+                flexShrink: 0,
+              }}
+            >
+              ⋯ Ещё
+            </button>
+          </div>
+
+          {/* Строка 2: основные быстрые действия (Save, Run, + Блок) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+            <button
+              type="button"
+              onClick={() => void saveWorkflow()}
+              style={{
+                flex: 1,
+                minHeight: 40,
+                padding: '8px 10px',
+                background: '#059669',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 7,
+                cursor: 'pointer',
+                fontSize: 13,
+                fontWeight: 700,
+              }}
+            >
+              Сохранить
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleRun()}
+              disabled={isRunning}
+              style={{
+                flex: 1,
+                minHeight: 40,
+                padding: '8px 10px',
+                background: isRunning ? '#94a3b8' : '#f59e0b',
+                color: '#0f172a',
+                border: 'none',
+                borderRadius: 7,
+                cursor: isRunning ? 'wait' : 'pointer',
+                fontSize: 13,
+                fontWeight: 700,
+              }}
+            >
+              {isRunning ? 'Выполняется…' : '▶ Run'}
+            </button>
+            <button
+              type="button"
+              onClick={() => switchMobileTab('palette')}
+              style={{
+                minHeight: 40,
+                padding: '8px 12px',
+                background: '#2563eb',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 7,
+                cursor: 'pointer',
+                fontSize: 13,
+                fontWeight: 700,
+                flexShrink: 0,
+              }}
+            >
+              + Блок
+            </button>
+          </div>
+
+          {/* Overflow-меню «Ещё» */}
+          {moreMenuOpen && (
+            <>
+              <div
+                onClick={() => setMoreMenuOpen(false)}
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  background: 'rgba(15, 23, 42, 0.45)',
+                  zIndex: 48,
+                }}
+              />
+              <div
+                style={{
+                  position: 'fixed',
+                  top: 98,
+                  left: 10,
+                  right: 10,
+                  maxHeight: '72vh',
+                  overflowY: 'auto',
+                  background: '#1e293b',
+                  border: '1px solid #475569',
+                  borderRadius: 10,
+                  padding: 12,
+                  boxShadow: '0 18px 40px rgba(0,0,0,0.45)',
+                  zIndex: 49,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <label style={{ fontSize: 12, color: '#cbd5e1', fontWeight: 600 }}>
+                  Название сценария
+                  <input
+                    value={workflowName}
+                    onChange={(e) => setWorkflowName(e.target.value)}
+                    placeholder="Название сценария"
+                    style={{
+                      width: '100%',
+                      marginTop: 4,
+                      padding: '8px 10px',
+                      borderRadius: 6,
+                      border: '1px solid #475569',
+                      background: '#0f172a',
+                      color: '#fff',
+                      fontSize: 14,
+                    }}
+                  />
+                </label>
+
+                <label
+                  style={{
+                    minHeight: 40,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '8px 12px',
+                    background: '#0284c7',
+                    color: '#fff',
+                    borderRadius: 7,
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: 600,
+                  }}
+                >
+                  {lastUpload ? `ZIP: ${formatZipLabel(lastUpload.filename)}` : 'Загрузить ZIP'}
+                  <input
+                    type="file"
+                    accept=".zip"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      setMoreMenuOpen(false);
+                      if (f) void handleUploadZip(f);
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      setTemplatesOpen(true);
+                    }}
+                    style={{
+                      minHeight: 40,
+                      padding: '8px 10px',
+                      background: '#4338ca',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 7,
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Шаблоны
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      openPublishDialog();
+                    }}
+                    style={{
+                      minHeight: 40,
+                      padding: '8px 10px',
+                      background: '#0d9488',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 7,
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Опубликовать
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      setIntegrationsOpen(true);
+                    }}
+                    style={{
+                      minHeight: 40,
+                      padding: '8px 10px',
+                      background: '#4f46e5',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 7,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Интеграции ({integrations.ai.configured ? 'AI ✓' : 'AI –'} · {integrations.telegram.configured ? 'TG ✓' : 'TG –'})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      setCustomNodesOpen(true);
+                    }}
+                    style={{
+                      minHeight: 40,
+                      padding: '8px 10px',
+                      background: '#7c3aed',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 7,
+                      fontSize: 13,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Мои ноды
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      setSettingsOpen(true);
+                    }}
+                    style={{
+                      minHeight: 40,
+                      padding: '8px 10px',
+                      background: '#334155',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 7,
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Настройки
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      void loadWorkflowById(workflowId ?? '');
+                    }}
+                    style={{
+                      minHeight: 40,
+                      padding: '8px 10px',
+                      background: '#2563eb',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 7,
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Перезагрузить
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      void deleteSelected();
+                    }}
+                    style={{
+                      flex: 1,
+                      minHeight: 40,
+                      padding: '8px 10px',
+                      background: '#dc2626',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 7,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Удалить блок
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!workflowId || deletingWorkflow}
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      void handleDeleteWorkflow();
+                    }}
+                    style={{
+                      flex: 1,
+                      minHeight: 40,
+                      padding: '8px 10px',
+                      borderRadius: 7,
+                      border: '1px solid #991b1b',
+                      background: !workflowId || deletingWorkflow ? '#0f172a' : '#7f1d1d',
+                      color: !workflowId || deletingWorkflow ? '#64748b' : '#fecaca',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: !workflowId || deletingWorkflow ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    Удалить сценарий
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    onLogout();
+                  }}
+                  style={{
+                    minHeight: 40,
+                    padding: '8px 12px',
+                    background: '#0f172a',
+                    color: '#fca5a5',
+                    border: '1px solid #475569',
+                    borderRadius: 7,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Выйти из аккаунта ({user.email})
+                </button>
+              </div>
+            </>
+          )}
+        </header>
+      ) : (
+        <header
+          style={{
+            minHeight: 54,
+            padding: '6px 14px',
+            background: '#0f172a',
+            color: '#f8fafc',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+            flexWrap: 'wrap',
+            flexShrink: 0,
+          }}
+        >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <strong style={{ fontSize: 15 }}>FloraByte</strong>
           <span
@@ -1272,11 +1725,12 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
           </button>
         </div>
       </header>
+      )}
 
       {statusMsg && (
         <div
           style={{
-            padding: '5px 14px',
+            padding: isMobile ? '5px 10px' : '5px 14px',
             background: '#eff6ff',
             borderBottom: '1px solid #bfdbfe',
             fontSize: 12,
@@ -1284,12 +1738,26 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            gap: 10,
+            gap: 8,
+            flexShrink: 0,
           }}
         >
-          <span>
+          <span
+            title={statusMsg}
+            style={
+              isMobile
+                ? {
+                    flex: 1,
+                    minWidth: 0,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }
+                : undefined
+            }
+          >
             {statusMsg}{' '}
-            {(!integrations.ai.configured || !integrations.telegram.configured) && (
+            {!isMobile && (!integrations.ai.configured || !integrations.telegram.configured) && (
               <button
                 type="button"
                 onClick={() => setIntegrationsOpen(true)}
@@ -1311,7 +1779,7 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
           </span>
           <button
             onClick={() => setStatusMsg('')}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#1e3a8a' }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#1e3a8a', flexShrink: 0 }}
           >
             ✕
           </button>
@@ -1319,92 +1787,261 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
       )}
 
       {/* Основная рабочая область */}
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        <NodeSidebar
-          catalog={catalog}
-          catalogSource={catalogSource}
-          templates={templates}
-          isOpen={paletteOpen}
-          onToggle={togglePalette}
-          onAddNode={addNode}
-          onApplyTemplate={applyTemplate}
-          onOpenTemplatesModal={() => setTemplatesOpen(true)}
-          onGenerateWorkflow={handleGenerateWorkflow}
-        />
+      {isMobile ? (
+        <>
+          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, width: '100%' }}>
+            {mobileTab === 'canvas' && (
+              <div
+                style={{ flex: 1, minHeight: '50vh', minWidth: 0, width: '100%', position: 'relative' }}
+                onDragOver={onCanvasDragOver}
+                onDrop={onCanvasDrop}
+              >
+                <ReactFlow
+                  nodes={nodes}
+                  edges={edges}
+                  nodeTypes={nodeTypes}
+                  onNodesChange={onNodesChange}
+                  onEdgesChange={onEdgesChange}
+                  onConnect={onConnect}
+                  onNodeClick={openNodePanel}
+                  isValidConnection={(connection) => !connectionError(connection, nodes, edges)}
+                  nodesDraggable
+                  nodesConnectable
+                  elementsSelectable
+                  nodesFocusable
+                  edgesFocusable
+                  deleteKeyCode={['Backspace', 'Delete']}
+                  fitView
+                >
+                  <Background />
+                  <Controls />
+                </ReactFlow>
+              </div>
+            )}
 
-        <div
-          style={{ flex: 1, minWidth: 0, position: 'relative' }}
-          onDragOver={onCanvasDragOver}
-          onDrop={onCanvasDrop}
-        >
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onNodeClick={openNodePanel}
-            isValidConnection={(connection) => !connectionError(connection, nodes, edges)}
-            nodesDraggable
-            nodesConnectable
-            elementsSelectable
-            nodesFocusable
-            edgesFocusable
-            deleteKeyCode={['Backspace', 'Delete']}
-            fitView
+            {mobileTab === 'palette' && (
+              <NodeSidebar
+                catalog={catalog}
+                catalogSource={catalogSource}
+                templates={templates}
+                isOpen
+                variant="fullscreen"
+                onToggle={() => switchMobileTab('canvas')}
+                onAddNode={addNode}
+                onApplyTemplate={applyTemplate}
+                onOpenTemplatesModal={() => setTemplatesOpen(true)}
+                onGenerateWorkflow={handleGenerateWorkflow}
+              />
+            )}
+
+            {mobileTab === 'settings' && (
+              <NodeSettings
+                key={`${selectedNode?.id ?? 'none'}-${String(selectedNode?.data.params?.upload_id ?? '')}`}
+                selectedNode={selectedNode}
+                nodeSpec={selectedNode ? specByType.get(selectedNode.data.kind) : undefined}
+                credentials={credentials}
+                isOpen
+                variant="fullscreen"
+                onToggle={() => switchMobileTab('canvas')}
+                onSave={saveNodeSettings}
+                onUploadZip={handleUploadZip}
+                onCreateCredential={handleCreateCredential}
+              />
+            )}
+
+            {mobileTab === 'report' && (
+              <ReportPanel
+                run={activeRun}
+                findings={findings}
+                reportMd={reportMd}
+                events={wsEvents}
+                runsHistory={runsHistory}
+                isOpen
+                variant="fullscreen"
+                onToggle={() => switchMobileTab('canvas')}
+                onSelectRun={(runId) => {
+                  setWsEvents([]);
+                  void syncRunState(runId);
+                }}
+                onRefreshHistory={() => void refreshRunsHistory()}
+                telegramConfigured={integrations.telegram.configured}
+                onSendTelegram={async (runId) => {
+                  try {
+                    const res = await api.sendRunToTelegram(runId);
+                    setStatusMsg(`Отчёт отправлен в Telegram (chat_id=${res.chat_id}).`);
+                  } catch (err) {
+                    setStatusMsg(`Ошибка отправки в Telegram: ${err instanceof Error ? err.message : String(err)}`);
+                  }
+                }}
+                emailConfigured={Boolean(integrations.email?.configured)}
+                onSendEmail={async (runId) => {
+                  try {
+                    const res = await api.sendRunToEmail(runId);
+                    setStatusMsg(`Отчёт отправлен на почту ${res.to_email}.`);
+                  } catch (err) {
+                    setStatusMsg(`Ошибка отправки на почту: ${err instanceof Error ? err.message : String(err)}`);
+                  }
+                }}
+              />
+            )}
+          </div>
+
+          {/* Нижний мобильный Tab Bar (одной рукой + safe-area) */}
+          <nav
+            aria-label="Навигация редактора"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(4, 1fr)',
+              background: '#0f172a',
+              borderTop: '1px solid #334155',
+              paddingBottom: 'env(safe-area-inset-bottom)',
+              flexShrink: 0,
+            }}
           >
-            <Background />
-            <Controls />
-            <MiniMap />
-          </ReactFlow>
-        </div>
+            {(
+              [
+                { id: 'canvas', label: 'Схема', icon: '🕸️' },
+                { id: 'palette', label: 'Блоки', icon: '🧩' },
+                { id: 'settings', label: 'Блок', icon: '⚙️' },
+                {
+                  id: 'report',
+                  label: findings.length > 0 ? `Отчёт (${findings.length})` : isRunning ? 'Отчёт ●' : 'Отчёт',
+                  icon: '📊',
+                },
+              ] as const
+            ).map((item) => {
+              const active = mobileTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => switchMobileTab(item.id)}
+                  style={{
+                    minHeight: 48,
+                    padding: '6px 4px',
+                    border: 'none',
+                    borderTop: active ? '2px solid #38bdf8' : '2px solid transparent',
+                    background: active ? '#1e293b' : 'transparent',
+                    color: active ? '#f8fafc' : '#94a3b8',
+                    fontSize: 12,
+                    fontWeight: active ? 700 : 500,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 2,
+                  }}
+                >
+                  <span style={{ fontSize: 14, lineHeight: 1 }}>{item.icon}</span>
+                  <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
+                    {item.label}
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
+        </>
+      ) : (
+        <>
+          <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+            <NodeSidebar
+              catalog={catalog}
+              catalogSource={catalogSource}
+              templates={templates}
+              variant={isTablet ? 'drawer' : 'docked'}
+              isOpen={isTablet ? tabletDrawer === 'palette' : paletteOpen}
+              onToggle={
+                isTablet
+                  ? () => setTabletDrawer((d) => (d === 'palette' ? 'none' : 'palette'))
+                  : togglePalette
+              }
+              onAddNode={addNode}
+              onApplyTemplate={applyTemplate}
+              onOpenTemplatesModal={() => setTemplatesOpen(true)}
+              onGenerateWorkflow={handleGenerateWorkflow}
+            />
 
-        <NodeSettings
-          key={`${selectedNode?.id ?? 'none'}-${String(selectedNode?.data.params?.upload_id ?? '')}`}
-          selectedNode={selectedNode}
-          nodeSpec={selectedNode ? specByType.get(selectedNode.data.kind) : undefined}
-          credentials={credentials}
-          isOpen={nodePanelOpen}
-          onToggle={toggleNodePanel}
-          onSave={saveNodeSettings}
-          onUploadZip={handleUploadZip}
-          onCreateCredential={handleCreateCredential}
-        />
-      </div>
+            <div
+              style={{ flex: 1, minWidth: 0, position: 'relative' }}
+              onDragOver={onCanvasDragOver}
+              onDrop={onCanvasDrop}
+            >
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                nodeTypes={nodeTypes}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                onNodeClick={openNodePanel}
+                isValidConnection={(connection) => !connectionError(connection, nodes, edges)}
+                nodesDraggable
+                nodesConnectable
+                elementsSelectable
+                nodesFocusable
+                edgesFocusable
+                deleteKeyCode={['Backspace', 'Delete']}
+                fitView
+              >
+                <Background />
+                <Controls />
+                {!isTablet && <MiniMap />}
+              </ReactFlow>
+            </div>
 
-      <ReportPanel
-        run={activeRun}
-        findings={findings}
-        reportMd={reportMd}
-        events={wsEvents}
-        runsHistory={runsHistory}
-        isOpen={panelOpen}
-        onToggle={() => setPanelOpen((o) => !o)}
-        onSelectRun={(runId) => {
-          setWsEvents([]);
-          void syncRunState(runId);
-        }}
-        onRefreshHistory={() => void refreshRunsHistory()}
-        telegramConfigured={integrations.telegram.configured}
-        onSendTelegram={async (runId) => {
-          try {
-            const res = await api.sendRunToTelegram(runId);
-            setStatusMsg(`Отчёт отправлен в Telegram (chat_id=${res.chat_id}).`);
-          } catch (err) {
-            setStatusMsg(`Ошибка отправки в Telegram: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }}
-        emailConfigured={Boolean(integrations.email?.configured)}
-        onSendEmail={async (runId) => {
-          try {
-            const res = await api.sendRunToEmail(runId);
-            setStatusMsg(`Отчёт отправлен на почту ${res.to_email}.`);
-          } catch (err) {
-            setStatusMsg(`Ошибка отправки на почту: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }}
-      />
+            <NodeSettings
+              key={`${selectedNode?.id ?? 'none'}-${String(selectedNode?.data.params?.upload_id ?? '')}`}
+              selectedNode={selectedNode}
+              nodeSpec={selectedNode ? specByType.get(selectedNode.data.kind) : undefined}
+              credentials={credentials}
+              variant={isTablet ? 'drawer' : 'docked'}
+              isOpen={isTablet ? tabletDrawer === 'settings' : nodePanelOpen}
+              onToggle={
+                isTablet
+                  ? () => setTabletDrawer((d) => (d === 'settings' ? 'none' : 'settings'))
+                  : toggleNodePanel
+              }
+              onSave={saveNodeSettings}
+              onUploadZip={handleUploadZip}
+              onCreateCredential={handleCreateCredential}
+            />
+          </div>
+
+          <ReportPanel
+            run={activeRun}
+            findings={findings}
+            reportMd={reportMd}
+            events={wsEvents}
+            runsHistory={runsHistory}
+            isOpen={panelOpen}
+            onToggle={() => setPanelOpen((o) => !o)}
+            onSelectRun={(runId) => {
+              setWsEvents([]);
+              void syncRunState(runId);
+            }}
+            onRefreshHistory={() => void refreshRunsHistory()}
+            telegramConfigured={integrations.telegram.configured}
+            onSendTelegram={async (runId) => {
+              try {
+                const res = await api.sendRunToTelegram(runId);
+                setStatusMsg(`Отчёт отправлен в Telegram (chat_id=${res.chat_id}).`);
+              } catch (err) {
+                setStatusMsg(`Ошибка отправки в Telegram: ${err instanceof Error ? err.message : String(err)}`);
+              }
+            }}
+            emailConfigured={Boolean(integrations.email?.configured)}
+            onSendEmail={async (runId) => {
+              try {
+                const res = await api.sendRunToEmail(runId);
+                setStatusMsg(`Отчёт отправлен на почту ${res.to_email}.`);
+              } catch (err) {
+                setStatusMsg(`Ошибка отправки на почту: ${err instanceof Error ? err.message : String(err)}`);
+              }
+            }}
+          />
+        </>
+      )}
 
       {settingsOpen && (
         <SettingsModal

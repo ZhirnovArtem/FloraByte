@@ -7,6 +7,7 @@ type NodeSidebarProps = {
   templates: TemplateDto[];
   isOpen: boolean;
   onToggle: () => void;
+  variant?: 'docked' | 'drawer' | 'fullscreen';
   onAddNode: (spec: NodeTypeSpec) => void;
   onApplyTemplate: (template: TemplateDto) => void;
   onOpenTemplatesModal?: () => void;
@@ -37,6 +38,7 @@ export default function NodeSidebar({
   templates,
   isOpen,
   onToggle,
+  variant = 'docked',
   onAddNode,
   onApplyTemplate,
   onOpenTemplatesModal,
@@ -45,7 +47,7 @@ export default function NodeSidebar({
   const [aiPrompt, setAiPrompt] = useState('');
   const [generating, setGenerating] = useState(false);
 
-  if (!isOpen) {
+  if (!isOpen && variant !== 'fullscreen') {
     return (
       <aside
         onClick={onToggle}
@@ -105,6 +107,39 @@ export default function NodeSidebar({
     );
   }
 
+  const asideStyle: React.CSSProperties =
+    variant === 'fullscreen'
+      ? {
+          width: '100%',
+          flex: 1,
+          minHeight: 0,
+          padding: 14,
+          background: '#f8fafc',
+          overflowY: 'auto',
+        }
+      : variant === 'drawer'
+        ? {
+            position: 'fixed',
+            top: 0,
+            bottom: 0,
+            left: 0,
+            width: 'min(320px, 85vw)',
+            padding: 14,
+            background: '#f8fafc',
+            borderRight: '1px solid #cbd5e1',
+            boxShadow: '8px 0 32px rgba(15, 23, 42, 0.25)',
+            overflowY: 'auto',
+            zIndex: 45,
+          }
+        : {
+            width: 260,
+            padding: 14,
+            background: '#f8fafc',
+            borderRight: '1px solid #e2e8f0',
+            overflowY: 'auto',
+            flexShrink: 0,
+          };
+
   const grouped = new Map<string, NodeTypeSpec[]>();
   for (const item of catalog) {
     const g = item.group || 'other';
@@ -130,51 +165,54 @@ export default function NodeSidebar({
   };
 
   return (
-    <aside
-      style={{
-        width: 260,
-        padding: 14,
-        background: '#f8fafc',
-        borderRight: '1px solid #e2e8f0',
-        overflowY: 'auto',
-        flexShrink: 0,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 6 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-          <h3 style={{ margin: 0, fontSize: 16 }}>Блоки (ноды)</h3>
-          <span
+    <>
+      {variant === 'drawer' && (
+        <div
+          onClick={onToggle}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.35)',
+            zIndex: 44,
+          }}
+        />
+      )}
+      <aside style={asideStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <h3 style={{ margin: 0, fontSize: 16 }}>Блоки (ноды)</h3>
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                padding: '2px 7px',
+                borderRadius: 999,
+                background: catalogSource === 'api' ? '#dcfce7' : '#fef3c7',
+                color: catalogSource === 'api' ? '#166534' : '#92400e',
+              }}
+            >
+              {catalogSource === 'api' ? 'API' : 'Offline'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onToggle}
+            title={variant === 'fullscreen' ? 'Вернуться к схеме' : 'Свернуть панель блоков'}
             style={{
-              fontSize: 10,
-              fontWeight: 700,
-              padding: '2px 7px',
-              borderRadius: 999,
-              background: catalogSource === 'api' ? '#dcfce7' : '#fef3c7',
-              color: catalogSource === 'api' ? '#166534' : '#92400e',
+              padding: variant === 'fullscreen' ? '6px 10px' : '3px 7px',
+              borderRadius: 6,
+              border: '1px solid #cbd5e1',
+              background: '#fff',
+              color: '#475569',
+              fontSize: variant === 'fullscreen' ? 12 : 11,
+              fontWeight: 600,
+              cursor: 'pointer',
+              flexShrink: 0,
             }}
           >
-            {catalogSource === 'api' ? 'API' : 'Offline'}
-          </span>
+            {variant === 'fullscreen' ? '← К схеме' : variant === 'drawer' ? '✕ Закрыть' : '◀ Свернуть'}
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={onToggle}
-          title="Свернуть панель блоков"
-          style={{
-            padding: '3px 7px',
-            borderRadius: 6,
-            border: '1px solid #cbd5e1',
-            background: '#fff',
-            color: '#475569',
-            fontSize: 11,
-            fontWeight: 600,
-            cursor: 'pointer',
-            flexShrink: 0,
-          }}
-        >
-          ◀ Свернуть
-        </button>
-      </div>
 
       {onGenerateWorkflow && (
         <div
@@ -378,6 +416,7 @@ export default function NodeSidebar({
           ))}
         </div>
       ))}
-    </aside>
+      </aside>
+    </>
   );
 }

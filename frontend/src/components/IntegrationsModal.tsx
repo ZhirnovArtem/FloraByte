@@ -518,7 +518,7 @@ export default function IntegrationsModal({
           boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
           <div>
             <h2 style={{ margin: 0, fontSize: 18 }}>Настройки → Искусственный интеллект и Интеграции</h2>
             <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
@@ -541,7 +541,7 @@ export default function IntegrationsModal({
           </button>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 0.85fr', gap: 16 }}>
+        <div className="fb-integ-grid">
           {/* Universal AI Provider */}
           <div style={{ border: '1px solid #cbd5e1', borderRadius: 10, padding: 14, background: '#f8fafc' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
@@ -904,7 +904,7 @@ export default function IntegrationsModal({
               </button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+            <div className="fb-two-col" style={{ marginBottom: 8 }}>
               <label style={{ display: 'block', fontSize: 12 }}>
                 <span style={{ fontWeight: 600 }}>Email получателя (по умолчанию)</span>
                 <input
@@ -929,7 +929,7 @@ export default function IntegrationsModal({
             </div>
 
             {emailTransport === 'smtp' && (
-              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: 8, marginBottom: 8 }}>
+              <div className="fb-smtp-grid" style={{ marginBottom: 8 }}>
                 <label style={{ display: 'block', fontSize: 12 }}>
                   <span style={{ fontWeight: 600 }}>SMTP Host</span>
                   <input

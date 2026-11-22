@@ -1,0 +1,65 @@
+/* Responsive helpers for FloraByte workflow editor & modals */
+
+.fb-editor-root {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  overflow-x: hidden;
+}
+
+.fb-custom-nodes-grid {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+}
+
+.fb-integ-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 16px;
+}
+
+.fb-two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.fb-smtp-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr 2fr;
+  gap: 8px;
+}
+
+.fb-param-row {
+  display: grid;
+  grid-template-columns: 1fr 90px 1fr 1fr auto;
+  gap: 4px;
+}
+
+.fb-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 768px) {
+  .fb-custom-nodes-grid,
+  .fb-integ-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .fb-two-col,
+  .fb-smtp-grid,
+  .fb-param-row {
+    grid-template-columns: 1fr;
+  }
+
+  .fb-mobile-touch-btn {
+    min-height: 40px;
+  }
+}

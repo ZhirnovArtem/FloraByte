@@ -316,7 +316,7 @@ export default function CustomNodesModal({
           boxShadow: '0 24px 60px rgba(0,0,0,0.28)',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
           <div>
             <h2 style={{ margin: 0, fontSize: 18 }}>Мои пользовательские ноды</h2>
             <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
@@ -358,7 +358,7 @@ export default function CustomNodesModal({
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 16 }}>
+        <div className="fb-custom-nodes-grid">
           {/* Left: Custom Nodes List */}
           <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, background: '#f8fafc', maxHeight: '72vh', overflowY: 'auto' }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: '#475569', marginBottom: 8 }}>
@@ -461,7 +461,7 @@ export default function CustomNodesModal({
 
           {/* Right: Node Editor */}
           <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14, background: '#ffffff' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+            <div className="fb-two-col" style={{ marginBottom: 10 }}>
               <label style={{ fontSize: 12 }}>
                 <span style={{ fontWeight: 600 }}>Название</span>
                 <input
@@ -501,7 +501,7 @@ export default function CustomNodesModal({
               />
             </label>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+            <div className="fb-two-col" style={{ marginBottom: 10 }}>
               <label style={{ fontSize: 12 }}>
                 <span style={{ fontWeight: 600 }}>Статус</span>
                 <select
@@ -531,7 +531,7 @@ export default function CustomNodesModal({
             </div>
 
             {/* Ports */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+            <div className="fb-two-col" style={{ marginBottom: 10 }}>
               <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 8, background: '#f8fafc' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <span style={{ fontSize: 12, fontWeight: 700 }}>Входные порты</span>
@@ -637,7 +637,7 @@ export default function CustomNodesModal({
                 )}
               </div>
               {paramRows.map((row, idx) => (
-                <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 90px 1fr 1fr auto', gap: 4, marginBottom: 4 }}>
+                <div key={idx} className="fb-param-row" style={{ marginBottom: 4 }}>
                   <input
                     type="text"
                     disabled={!canEdit}

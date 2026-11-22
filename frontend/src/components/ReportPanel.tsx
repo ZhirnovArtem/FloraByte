@@ -10,6 +10,7 @@ type ReportPanelProps = {
   runsHistory: RunDto[];
   isOpen: boolean;
   onToggle: () => void;
+  variant?: 'docked' | 'fullscreen';
   onSelectRun?: (runId: string) => void;
   onRefreshHistory?: () => void;
   telegramConfigured?: boolean;
@@ -33,6 +34,7 @@ export default function ReportPanel({
   runsHistory,
   isOpen,
   onToggle,
+  variant = 'docked',
   onSelectRun,
   onRefreshHistory,
   telegramConfigured,
@@ -79,34 +81,50 @@ export default function ReportPanel({
     }
   };
 
+  const effectiveOpen = variant === 'fullscreen' ? true : isOpen;
+
   return (
     <div
-      style={{
-        borderTop: '1px solid #cbd5e1',
-        background: '#ffffff',
-        display: 'flex',
-        flexDirection: 'column',
-        height: isOpen ? 310 : 42,
-        transition: 'height 0.15s ease',
-        flexShrink: 0,
-      }}
+      style={
+        variant === 'fullscreen'
+          ? {
+              background: '#ffffff',
+              display: 'flex',
+              flexDirection: 'column',
+              flex: 1,
+              minHeight: 0,
+              width: '100%',
+            }
+          : {
+              borderTop: '1px solid #cbd5e1',
+              background: '#ffffff',
+              display: 'flex',
+              flexDirection: 'column',
+              height: effectiveOpen ? 310 : 42,
+              transition: 'height 0.15s ease',
+              flexShrink: 0,
+            }
+      }
     >
       <div
         style={{
-          height: 42,
-          padding: '0 16px',
+          minHeight: 42,
+          height: effectiveOpen ? 'auto' : 42,
+          padding: effectiveOpen ? '6px 14px' : '0 16px',
           background: '#f1f5f9',
+          borderBottom: effectiveOpen ? '1px solid #e2e8f0' : 'none',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          gap: 12,
+          flexWrap: effectiveOpen ? 'wrap' : 'nowrap',
+          gap: 10,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <button
             onClick={onToggle}
             style={{
-              padding: '4px 10px',
+              padding: variant === 'fullscreen' ? '6px 10px' : '4px 10px',
               background: '#ffffff',
               border: '1px solid #cbd5e1',
               borderRadius: 6,
@@ -115,7 +133,11 @@ export default function ReportPanel({
               fontWeight: 700,
             }}
           >
-            {isOpen ? '▼ Свернуть панель' : '▲ Находки и отчёт'}
+            {variant === 'fullscreen'
+              ? '← К схеме'
+              : effectiveOpen
+                ? '▼ Свернуть панель'
+                : '▲ Находки и отчёт'}
           </button>
 
           {run && (
@@ -158,7 +180,7 @@ export default function ReportPanel({
           )}
         </div>
 
-        {isOpen && (
+        {effectiveOpen && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             {(['findings', 'dashboard', 'ai', 'markdown', 'log', 'history'] as const).map((t) => (
               <button
@@ -271,8 +293,8 @@ export default function ReportPanel({
         )}
       </div>
 
-      {isOpen && (
-        <div style={{ flex: 1, overflowY: 'auto', padding: 14 }}>
+      {effectiveOpen && (
+        <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', padding: 14 }}>
           {tab === 'findings' && (
             <div>
               {run?.nodes && run.nodes.some((n) => n.status === 'failed') && (
@@ -396,7 +418,7 @@ export default function ReportPanel({
           )}
 
           {tab === 'dashboard' && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div className="fb-two-col" style={{ gap: 16 }}>
               <div style={{ padding: 12, border: '1px solid #e2e8f0', borderRadius: 8, background: '#f8fafc' }}>
                 <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Распределение по Severity</div>
                 {(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const).map((lvl) => {

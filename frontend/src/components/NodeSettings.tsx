@@ -8,6 +8,7 @@ type NodeSettingsProps = {
   credentials: CredentialDto[];
   isOpen: boolean;
   onToggle: () => void;
+  variant?: 'docked' | 'drawer' | 'fullscreen';
   onSave: (nodeId: string, label: string, params: Record<string, unknown>) => void;
   onUploadZip?: (file: File) => Promise<string | null>;
   onCreateCredential?: (name: string, kind: string, value: string) => Promise<CredentialDto | null>;
@@ -19,6 +20,7 @@ export default function NodeSettings({
   credentials,
   isOpen,
   onToggle,
+  variant = 'docked',
   onSave,
   onUploadZip,
   onCreateCredential,
@@ -30,7 +32,7 @@ export default function NodeSettings({
   const [credValue, setCredValue] = useState('');
   const [showNewCred, setShowNewCred] = useState(false);
 
-  if (!isOpen) {
+  if (!isOpen && variant !== 'fullscreen') {
     return (
       <aside
         onClick={onToggle}
@@ -96,47 +98,80 @@ export default function NodeSettings({
     borderRadius: 6,
     marginTop: 4,
     marginBottom: 12,
-    fontSize: 13,
+    fontSize: variant === 'fullscreen' ? 14 : 13,
   };
+
+  const asideStyle: React.CSSProperties =
+    variant === 'fullscreen'
+      ? {
+          width: '100%',
+          flex: 1,
+          minHeight: 0,
+          padding: 16,
+          background: '#f8fafc',
+          overflowY: 'auto',
+        }
+      : variant === 'drawer'
+        ? {
+            position: 'fixed',
+            top: 0,
+            bottom: 0,
+            right: 0,
+            width: 'min(340px, 88vw)',
+            padding: 18,
+            background: '#f8fafc',
+            borderLeft: '1px solid #cbd5e1',
+            boxShadow: '-8px 0 32px rgba(15, 23, 42, 0.25)',
+            overflowY: 'auto',
+            zIndex: 45,
+          }
+        : {
+            width: 310,
+            padding: 18,
+            background: '#f8fafc',
+            borderLeft: '1px solid #e2e8f0',
+            overflowY: 'auto',
+            flexShrink: 0,
+          };
 
   const collapseBtn = (
     <button
       type="button"
       onClick={onToggle}
-      title="Свернуть панель настроек"
+      title={variant === 'fullscreen' ? 'Вернуться к схеме' : 'Свернуть панель настроек'}
       style={{
-        padding: '3px 7px',
+        padding: variant === 'fullscreen' ? '6px 10px' : '3px 7px',
         borderRadius: 6,
         border: '1px solid #cbd5e1',
         background: '#fff',
         color: '#475569',
-        fontSize: 11,
+        fontSize: variant === 'fullscreen' ? 12 : 11,
         fontWeight: 600,
         cursor: 'pointer',
         flexShrink: 0,
       }}
     >
-      Свернуть ▶
+      {variant === 'fullscreen' ? '← К схеме' : variant === 'drawer' ? '✕ Закрыть' : 'Свернуть ▶'}
     </button>
   );
 
   if (!selectedNode) {
     return (
-      <aside
-        style={{
-          width: 310,
-          padding: 18,
-          background: '#f8fafc',
-          borderLeft: '1px solid #e2e8f0',
-          flexShrink: 0,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8 }}>
-          <h3 style={{ margin: 0 }}>Настройки блока</h3>
-          {collapseBtn}
-        </div>
-        <p style={{ color: '#64748b', fontSize: 13 }}>Выберите блок на схеме для редактирования параметров.</p>
-      </aside>
+      <>
+        {variant === 'drawer' && (
+          <div
+            onClick={onToggle}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.35)', zIndex: 44 }}
+          />
+        )}
+        <aside style={asideStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8 }}>
+            <h3 style={{ margin: 0 }}>Настройки блока</h3>
+            {collapseBtn}
+          </div>
+          <p style={{ color: '#64748b', fontSize: 13 }}>Выберите блок на схеме для редактирования параметров.</p>
+        </aside>
+      </>
     );
   }
 
@@ -184,20 +219,18 @@ export default function NodeSettings({
   };
 
   return (
-    <aside
-      style={{
-        width: 310,
-        padding: 18,
-        background: '#f8fafc',
-        borderLeft: '1px solid #e2e8f0',
-        overflowY: 'auto',
-        flexShrink: 0,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 8 }}>
-        <h3 style={{ margin: 0 }}>Настройки блока</h3>
-        {collapseBtn}
-      </div>
+    <>
+      {variant === 'drawer' && (
+        <div
+          onClick={onToggle}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.35)', zIndex: 44 }}
+        />
+      )}
+      <aside style={asideStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 8 }}>
+          <h3 style={{ margin: 0 }}>Настройки блока</h3>
+          {collapseBtn}
+        </div>
       <div style={{ fontSize: 12, color: '#64748b', fontFamily: 'monospace', marginBottom: 14 }}>
         {kind}
       </div>
@@ -406,6 +439,7 @@ export default function NodeSettings({
         style={{
           width: '100%',
           padding: 10,
+          minHeight: variant === 'fullscreen' ? 42 : undefined,
           background: '#2563eb',
           color: '#ffffff',
           border: 'none',
@@ -416,6 +450,7 @@ export default function NodeSettings({
       >
         Применить параметры
       </button>
-    </aside>
+      </aside>
+    </>
   );
 }
