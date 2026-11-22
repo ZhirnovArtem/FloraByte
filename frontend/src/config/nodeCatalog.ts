@@ -19,8 +19,8 @@ export const fallbackNodeCatalog: NodeTypeSpec[] = [
     params_schema: {
       type: 'object',
       properties: {
-        cron: { type: 'string', default: '', description: 'Cron expression e.g. "0 9 * * 1-5"' },
-        interval_seconds: { type: 'integer', default: 0, description: 'Alternative: fixed interval in seconds' },
+        cron: { type: 'string', default: '', description: 'Cron expression e.g. "0 9 * * 1-5" (оставьте пустым для интервала)' },
+        interval_seconds: { type: 'integer', default: 60, description: 'Интервал запуска на сервере (минимум 30с; повтор делает сервер)' },
       },
     },
   },

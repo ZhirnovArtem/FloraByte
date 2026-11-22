@@ -42,6 +42,7 @@ export default function ReportPanel({
 }: ReportPanelProps) {
   const [tab, setTab] = useState<'findings' | 'dashboard' | 'ai' | 'markdown' | 'log' | 'history'>('findings');
   const [catFilter, setCatFilter] = useState<string>('ALL');
+  const [triggerFilter, setTriggerFilter] = useState<'all' | 'manual' | 'schedule'>('all');
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [baseRunId, setBaseRunId] = useState<string>('');
   const [targetRunId, setTargetRunId] = useState<string>('');
@@ -729,9 +730,37 @@ export default function ReportPanel({
 
           {tab === 'history' && (
             <div>
-              {runsHistory.length === 0 ? (
-                <div style={{ color: '#64748b', fontSize: 13 }}>Запусков пока нет.</div>
-              ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, color: '#475569', fontWeight: 600 }}>Фильтр триггера:</span>
+                {(['all', 'manual', 'schedule'] as const).map((tf) => (
+                  <button
+                    key={tf}
+                    type="button"
+                    onClick={() => setTriggerFilter(tf)}
+                    style={{
+                      padding: '3px 9px',
+                      borderRadius: 6,
+                      border: '1px solid #cbd5e1',
+                      background: triggerFilter === tf ? '#0f172a' : '#fff',
+                      color: triggerFilter === tf ? '#fff' : '#334155',
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {tf === 'all' ? 'Все' : tf === 'manual' ? 'Manual (ручные)' : 'Schedule (расписание)'}
+                  </button>
+                ))}
+              </div>
+              {(() => {
+                const visibleRuns =
+                  triggerFilter === 'all'
+                    ? runsHistory
+                    : runsHistory.filter((item) => item.trigger === triggerFilter);
+                if (visibleRuns.length === 0) {
+                  return <div style={{ color: '#64748b', fontSize: 13 }}>Запусков по выбранному фильтру пока нет.</div>;
+                }
+                return (
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead>
                     <tr style={{ textAlign: 'left', borderBottom: '2px solid #e2e8f0', color: '#475569' }}>
@@ -739,6 +768,7 @@ export default function ReportPanel({
                       <th style={{ padding: '6px 8px' }}>Статус</th>
                       <th style={{ padding: '6px 8px' }}>Триггер</th>
                       <th style={{ padding: '6px 8px' }}>Находок</th>
+                      <th style={{ padding: '6px 8px' }}>Ошибки блоков</th>
                       <th style={{ padding: '6px 8px' }}>AI-анализ</th>
                       <th style={{ padding: '6px 8px' }}>Длительность</th>
                       <th style={{ padding: '6px 8px' }}>Запущен</th>
@@ -746,7 +776,7 @@ export default function ReportPanel({
                     </tr>
                   </thead>
                   <tbody>
-                    {runsHistory.map((item) => {
+                    {visibleRuns.map((item) => {
                       const aiMode = item.ai_report?.validation?.mode;
                       const aiLabel =
                         aiMode === 'llm' && item.ai_report?.validation?.passed
@@ -762,14 +792,46 @@ export default function ReportPanel({
                             ? `${(item.duration_ms / 1000).toFixed(1)} с`
                             : `${item.duration_ms} мс`
                           : '—';
+                      const failedNodes = item.summary?.failed_nodes ?? [];
+                      const fallbackFailed =
+                        failedNodes.length === 0 && item.summary?.node_statuses
+                          ? Object.entries(item.summary.node_statuses)
+                              .filter(([, st]) => st === 'failed')
+                              .map(([node_id]) => ({ node_id, error: item.summary?.error || 'ошибка' }))
+                          : [];
+                      const errsToShow = failedNodes.length > 0 ? failedNodes : fallbackFailed;
+                      const statusStyle =
+                        item.status === 'success'
+                          ? { bg: '#dcfce7', fg: '#166534' }
+                          : item.status === 'partial'
+                            ? { bg: '#fef3c7', fg: '#92400e' }
+                            : item.status === 'failed'
+                              ? { bg: '#fee2e2', fg: '#991b1b' }
+                              : { bg: '#e0f2fe', fg: '#075985' };
                       return (
                       <tr key={item.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                         <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{item.id.slice(0, 8)}</td>
-                        <td style={{ padding: '6px 8px', fontWeight: 700 }} title={item.summary?.error || ''}>
-                          {item.status}
+                        <td style={{ padding: '6px 8px' }} title={item.summary?.error || ''}>
+                          <span
+                            style={{
+                              padding: '2px 7px',
+                              borderRadius: 999,
+                              fontSize: 11,
+                              fontWeight: 700,
+                              background: statusStyle.bg,
+                              color: statusStyle.fg,
+                            }}
+                          >
+                            {item.status}
+                          </span>
                         </td>
                         <td style={{ padding: '6px 8px' }}>{item.trigger}</td>
                         <td style={{ padding: '6px 8px' }}>{item.summary?.report?.findings_count ?? '—'}</td>
+                        <td style={{ padding: '6px 8px', maxWidth: 260, color: '#991b1b', fontSize: 11 }}>
+                          {errsToShow.length > 0
+                            ? errsToShow.map((fn) => `${fn.node_id}: ${fn.error}`).join('; ')
+                            : item.summary?.error || '—'}
+                        </td>
                         <td style={{ padding: '6px 8px' }}>{aiLabel}</td>
                         <td style={{ padding: '6px 8px' }}>{dur}</td>
                         <td style={{ padding: '6px 8px' }}>{item.started_at ? item.started_at.replace('T', ' ').slice(0, 19) : '—'}</td>
@@ -801,7 +863,8 @@ export default function ReportPanel({
                     })}
                   </tbody>
                 </table>
-              )}
+                );
+              })()}
             </div>
           )}
         </div>

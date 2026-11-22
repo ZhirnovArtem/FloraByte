@@ -582,7 +582,22 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
       }
       const list = await api.listWorkflows().catch(() => workflows);
       setWorkflows(list);
-      setStatusMsg(`Сценарий "${saved.name}" сохранён на сервере (и в localStorage).`);
+      const schedWarnings = saved.schedule_warnings ?? [];
+      const schedEntries = saved.schedule_summary ?? [];
+      const schedDesc = schedEntries
+        .map((s) => (s.cron ? `cron=${s.cron}` : `interval=${s.interval_seconds}s`))
+        .join(', ');
+      if (schedWarnings.length > 0 && (saved.scheduled_jobs ?? 0) === 0) {
+        setStatusMsg(`⚠️ Сценарий "${saved.name}" сохранён, но расписание не активно: ${schedWarnings.join(' ')}`);
+      } else if (schedWarnings.length > 0 && (saved.scheduled_jobs ?? 0) > 0) {
+        setStatusMsg(
+          `✅ Сценарий "${saved.name}" сохранён. Schedule зарегистрирован (${schedDesc}). ⚠️ ${schedWarnings.join(' ')}`,
+        );
+      } else if ((saved.scheduled_jobs ?? 0) > 0) {
+        setStatusMsg(`✅ Сценарий "${saved.name}" сохранён. Schedule зарегистрирован (${schedDesc}).`);
+      } else {
+        setStatusMsg(`Сценарий "${saved.name}" сохранён на сервере (и в localStorage).`);
+      }
       return saved;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

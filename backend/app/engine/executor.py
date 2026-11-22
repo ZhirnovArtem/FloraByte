@@ -107,7 +107,7 @@ class Executor:
                     session.add(run)
                     session.commit()
             try:
-                await self._execute_graph(run_id, graph, workspace, owner_id=owner_id)
+                await self._execute_graph(run_id, graph, workspace, owner_id=owner_id, trigger=trigger)
             except Exception as e:
                 logger.exception("Run %s failed: %s", run_id, e)
                 with self.session_factory() as session:
@@ -149,6 +149,7 @@ class Executor:
         graph: dict[str, Any],
         workspace_root: Path,
         owner_id: str | None = None,
+        trigger: str = "manual",
     ) -> None:
         settings = get_settings()
         with self.session_factory() as session:
@@ -161,6 +162,7 @@ class Executor:
         # which output ports were activated (for branching)
         active_ports: dict[str, set[str]] = {}
         node_status: dict[str, str] = {nid: "pending" for nid in nodes}
+        failed_nodes: list[dict[str, str]] = []
         custom_node_versions: dict[str, dict[str, Any]] = {}
 
         # For skipped propagation: edge is active if source succeeded or declares continue_downstream_on_error
@@ -257,6 +259,7 @@ class Executor:
                     workspace=workspace_root,
                     settings=settings,
                     owner_id=owner_id,
+                    trigger=trigger,
                 )
 
                 timeout = settings.node_timeout_sec
@@ -291,6 +294,7 @@ class Executor:
 
                 if node_err:
                     node_status[node_id] = "failed"
+                    failed_nodes.append({"node_id": node_id, "error": node_err})
                     await self._mark_node(
                         run_id, node_id, "failed",
                         started_at=started, finished_at=finished,
@@ -332,6 +336,7 @@ class Executor:
                 err = redact_text(f"{type(e).__name__}: {e}")
                 logger.warning("Node %s failed: %s\n%s", node_id, err, traceback.format_exc())
                 node_status[node_id] = "failed"
+                failed_nodes.append({"node_id": node_id, "error": err})
                 await self._mark_node(
                     run_id, node_id, "failed",
                     started_at=started, finished_at=finished, error=err,
@@ -357,7 +362,21 @@ class Executor:
             final = "success"
 
         # Collect summary findings if any export produced report, and ai_report if ai.explain ran
-        summary: dict[str, Any] = {"node_statuses": node_status}
+        skipped_nodes = [nid for nid, st in node_status.items() if st == "skipped"]
+        summary: dict[str, Any] = {
+            "node_statuses": node_status,
+            "failed_nodes": failed_nodes,
+            "skipped_nodes": skipped_nodes,
+        }
+        if failed_nodes:
+            summary["error"] = "; ".join(f"{fn['node_id']}: {fn['error']}" for fn in failed_nodes)
+            logger.warning(
+                "Run %s (trigger=%s) finished status=%s failed_nodes=%s",
+                run_id,
+                trigger,
+                final,
+                summary["error"],
+            )
         if custom_node_versions:
             summary["custom_nodes"] = custom_node_versions
         ai_report: dict[str, Any] | None = None

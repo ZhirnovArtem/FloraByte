@@ -56,8 +56,14 @@ async def lifespan(app: FastAPI):
 
     executor = Executor(session_factory)
 
-    async def _cb(workflow_id: str, graph: dict) -> str:
-        return await executor.run_workflow(workflow_id, graph, trigger="schedule", wait=False)
+    async def _cb(workflow_id: str, graph: dict, owner_id: str | None = None) -> str:
+        return await executor.run_workflow(
+            workflow_id,
+            graph,
+            trigger="schedule",
+            wait=False,
+            owner_id=owner_id,
+        )
 
     set_run_callback(_cb)
     with Session(get_engine()) as session:

@@ -121,6 +121,43 @@ export default function NodeSettings({
         />
       </label>
 
+      {kind === 'trigger.schedule' && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: '8px 10px',
+            borderRadius: 8,
+            background: '#eff6ff',
+            border: '1px solid #bfdbfe',
+            color: '#1e3a8a',
+            fontSize: 11,
+            lineHeight: 1.45,
+          }}
+        >
+          <strong>Повтор делает сервер</strong> (APScheduler), не стрелка в графе. Задайте{' '}
+          <code>interval_seconds ≥ 30</code> (Cron пустой) или Cron-выражение, затем нажмите{' '}
+          <strong>Применить</strong> и <strong>Сохранить</strong> сценарий.
+        </div>
+      )}
+
+      {kind === 'source.upload_zip' && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: '8px 10px',
+            borderRadius: 8,
+            background: '#fffbeb',
+            border: '1px solid #fde68a',
+            color: '#92400e',
+            fontSize: 11,
+            lineHeight: 1.45,
+          }}
+        >
+          Временный ZIP-архив подходит для ручного запуска. Для регулярных проверок по{' '}
+          <strong>Schedule</strong> используйте блок <strong>Git Clone</strong>.
+        </div>
+      )}
+
       {propEntries.length === 0 && (
         <p style={{ fontSize: 12, color: '#64748b' }}>У этого блока нет настраиваемых параметров.</p>
       )}

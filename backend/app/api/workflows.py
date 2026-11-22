@@ -12,7 +12,11 @@ from app.core.db import get_session
 from app.core.models import User, Workflow
 from app.engine.executor import Executor
 from app.engine.graph import GraphError, validate_graph
-from app.engine.scheduler import reload_schedules
+from app.engine.scheduler import (
+    get_workflow_scheduled_jobs_count,
+    inspect_schedule_graph,
+    reload_schedules,
+)
 from app.nodes.custom_manager import build_effective_registry
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
@@ -37,12 +41,17 @@ class WorkflowUpdate(BaseModel):
 
 
 def _to_dict(w: Workflow) -> dict:
+    graph = w.graph_json or {}
+    active_schedules, schedule_warnings = inspect_schedule_graph(graph)
     return {
         "id": w.id,
         "name": w.name,
-        "graph_json": w.graph_json,
+        "graph_json": graph,
         "is_template": w.is_template,
         "description": w.description,
+        "scheduled_jobs": get_workflow_scheduled_jobs_count(w.id),
+        "schedule_summary": active_schedules,
+        "schedule_warnings": schedule_warnings,
         "created_at": w.created_at.isoformat() if w.created_at else None,
         "updated_at": w.updated_at.isoformat() if w.updated_at else None,
     }

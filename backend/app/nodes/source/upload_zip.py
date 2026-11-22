@@ -141,6 +141,10 @@ class UploadZipNode(BaseNode):
             raise ValueError("upload_id must be a valid UUID") from exc
         upload_path = settings.upload_dir / f"{upload_id}.zip"
         if not upload_path.is_file():
+            if ctx.trigger == "schedule":
+                raise FileNotFoundError(
+                    f"Upload not found: {upload_id}. Upload ZIP не поддерживается для надёжных запусков по расписанию (trigger=schedule) — используйте source.git_clone."
+                )
             raise FileNotFoundError(f"Upload not found: {upload_id}")
 
         extract_dir = Path(ctx.workspace) / "src"

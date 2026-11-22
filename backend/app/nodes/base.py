@@ -27,6 +27,7 @@ class NodeContext(BaseModel):
     settings: Any = None
     emit: Any = None  # optional async callback for progress events
     owner_id: str | None = None
+    trigger: str = "manual"
 
 
 class BaseNode(ABC):

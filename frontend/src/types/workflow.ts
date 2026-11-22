@@ -110,6 +110,13 @@ export type WorkflowDto = {
   description: string;
   is_template: boolean;
   graph_json: BackendGraph;
+  scheduled_jobs?: number;
+  schedule_summary?: Array<{
+    node_id: string;
+    cron?: string;
+    interval_seconds?: number | null;
+  }>;
+  schedule_warnings?: string[];
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -269,6 +276,8 @@ export type RunDto = {
   duration_ms?: number | null;
   summary?: {
     node_statuses?: Record<string, string>;
+    failed_nodes?: Array<{ node_id: string; error: string }>;
+    skipped_nodes?: string[];
     report?: {
       findings_count?: number;
       findings?: FindingDto[];

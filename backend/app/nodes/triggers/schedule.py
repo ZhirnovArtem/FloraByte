@@ -9,8 +9,8 @@ from app.nodes.registry import register_node
 
 
 class Params(BaseModel):
-    cron: str = Field("", description="Cron expression, e.g. '0 9 * * 1-5'")
-    interval_seconds: int | None = Field(None, description="Alternative: fixed interval")
+    cron: str = Field("", description="Cron expression, e.g. '0 9 * * 1-5' (оставьте пустым при использовании интервала)")
+    interval_seconds: int | None = Field(None, description="Интервал запуска на сервере в секундах (минимум 30с; повтор делает сервер)")
 
 
 @register_node
