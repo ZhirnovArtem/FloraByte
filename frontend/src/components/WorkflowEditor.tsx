@@ -21,6 +21,7 @@ import ReportPanel from './ReportPanel';
 import IntegrationsModal from './IntegrationsModal';
 import SettingsModal from './SettingsModal';
 import CustomNodesModal from './CustomNodesModal';
+import TemplatesModal from './TemplatesModal';
 import { fallbackNodeCatalog } from '../config/nodeCatalog';
 import * as api from '../api/client';
 import { connectionError, safeGraphForLocalStorage } from '../utils/graphValidation';
@@ -244,6 +245,13 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
   const [integrationsOpen, setIntegrationsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [customNodesOpen, setCustomNodesOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishName, setPublishName] = useState('');
+  const [publishDesc, setPublishDesc] = useState('');
+  const [publishVis, setPublishVis] = useState<'private' | 'public'>('private');
+  const [publishBusy, setPublishBusy] = useState(false);
+  const [publishErr, setPublishErr] = useState('');
 
   const [workflowId, setWorkflowId] = useState<string | null>(null);
   const [workflowName, setWorkflowName] = useState<string>('Security Workflow');
@@ -654,6 +662,65 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
     }
   };
 
+  const applyCopiedWorkflow = async (copied: WorkflowDto) => {
+    const conv = fromBackendGraph(copied.graph_json, catalog);
+    if (lastUpload) {
+      conv.nodes = conv.nodes.map((n) =>
+        n.data.kind === 'source.upload_zip'
+          ? { ...n, data: { ...n.data, params: { ...(n.data.params ?? {}), upload_id: lastUpload.id } } }
+          : n,
+      );
+    }
+    setNodes(conv.nodes);
+    setEdges(conv.edges);
+    setWorkflowId(copied.id);
+    setWorkflowName(copied.name);
+    const list = await api.listWorkflows().catch(() => workflows);
+    setWorkflows(list);
+    setStatusMsg(`Шаблон скопирован в ваш сценарий «${copied.name}».`);
+  };
+
+  const openPublishDialog = () => {
+    setPublishName(workflowName || 'Мой шаблон');
+    setPublishDesc('');
+    setPublishVis('private');
+    setPublishErr('');
+    setPublishOpen(true);
+  };
+
+  const handlePublishTemplate = async () => {
+    const name = publishName.trim();
+    if (!name) {
+      setPublishErr('Введите название шаблона.');
+      return;
+    }
+    setPublishBusy(true);
+    setPublishErr('');
+    try {
+      const saved = await saveWorkflow();
+      if (!saved) {
+        setPublishErr('Не удалось сохранить сценарий на сервере перед публикацией.');
+        return;
+      }
+      const created = await api.publishTemplate({
+        workflow_id: saved.id,
+        name,
+        description: publishDesc.trim(),
+        visibility: publishVis,
+      });
+      const freshTemplates = await api.listTemplates().catch(() => templates);
+      setTemplates(freshTemplates);
+      setPublishOpen(false);
+      setStatusMsg(
+        `✅ Шаблон «${created.name}» опубликован (${created.visibility === 'public' ? 'виден всем' : 'только для вас'}).`,
+      );
+    } catch (err) {
+      setPublishErr(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPublishBusy(false);
+    }
+  };
+
   const handleGenerateWorkflow = async (prompt: string) => {
     try {
       const gen = await api.generateAiWorkflow(prompt);
@@ -965,6 +1032,24 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
           </button>
 
           <button
+            type="button"
+            onClick={() => setTemplatesOpen(true)}
+            style={{
+              padding: '7px 11px',
+              background: '#4338ca',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 7,
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+            title="Открыть библиотеку шаблонов (Системные / Публичные / Мои)"
+          >
+            Шаблоны
+          </button>
+
+          <button
             onClick={() => void saveWorkflow()}
             style={{
               padding: '7px 12px',
@@ -978,6 +1063,24 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
             }}
           >
             Сохранить
+          </button>
+
+          <button
+            type="button"
+            onClick={openPublishDialog}
+            style={{
+              padding: '7px 11px',
+              background: '#0d9488',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 7,
+              cursor: 'pointer',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+            title="Опубликовать текущий сценарий как шаблон (private / public)"
+          >
+            Опубликовать как шаблон
           </button>
 
           <button
@@ -1102,6 +1205,7 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
           templates={templates}
           onAddNode={addNode}
           onApplyTemplate={applyTemplate}
+          onOpenTemplatesModal={() => setTemplatesOpen(true)}
           onGenerateWorkflow={handleGenerateWorkflow}
         />
 
@@ -1218,6 +1322,146 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
             })();
           }}
         />
+      )}
+
+      {templatesOpen && (
+        <TemplatesModal
+          templates={templates}
+          onClose={() => setTemplatesOpen(false)}
+          onChanged={setTemplates}
+          onCopied={(copied) => void applyCopiedWorkflow(copied)}
+        />
+      )}
+
+      {publishOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 60,
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: 'min(460px, 100%)',
+              background: '#fff',
+              borderRadius: 12,
+              boxShadow: '0 20px 50px rgba(0,0,0,0.35)',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                padding: '13px 16px',
+                background: '#0f172a',
+                color: '#f8fafc',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <strong style={{ fontSize: 14 }}>Опубликовать как шаблон</strong>
+              <button
+                type="button"
+                onClick={() => setPublishOpen(false)}
+                style={{ background: 'none', border: 'none', color: '#cbd5e1', fontSize: 18, cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontSize: 12, color: '#475569' }}>
+                Будет создана отдельная копия-шаблон. Рабочий сценарий и его расписание останутся без изменений, а токены и <code>credential_id</code> автоматически очистятся.
+              </div>
+
+              <label style={{ fontSize: 12, fontWeight: 600 }}>
+                Название шаблона
+                <input
+                  type="text"
+                  value={publishName}
+                  onChange={(e) => setPublishName(e.target.value)}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '7px 9px', marginTop: 4, borderRadius: 6, border: '1px solid #cbd5e1' }}
+                />
+              </label>
+
+              <label style={{ fontSize: 12, fontWeight: 600 }}>
+                Описание
+                <textarea
+                  rows={2}
+                  value={publishDesc}
+                  onChange={(e) => setPublishDesc(e.target.value)}
+                  placeholder="Кратко: что проверяет этот сценарий"
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '7px 9px', marginTop: 4, borderRadius: 6, border: '1px solid #cbd5e1', fontFamily: 'inherit' }}
+                />
+              </label>
+
+              <div style={{ fontSize: 12 }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Приватность</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5, cursor: 'pointer' }}>
+                  <input
+                    type="radio"
+                    name="tpl-vis"
+                    checked={publishVis === 'private'}
+                    onChange={() => setPublishVis('private')}
+                  />
+                  <span>
+                    <strong>Только я (private)</strong> — шаблон виден только вам
+                  </span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input
+                    type="radio"
+                    name="tpl-vis"
+                    checked={publishVis === 'public'}
+                    onChange={() => setPublishVis('public')}
+                  />
+                  <span>
+                    <strong>Все пользователи (public)</strong> — шаблон смогут копировать другие пользователи
+                  </span>
+                </label>
+              </div>
+
+              {publishErr && (
+                <div style={{ fontSize: 12, color: '#991b1b', background: '#fef2f2', padding: 8, borderRadius: 6, border: '1px solid #fecaca' }}>
+                  ❌ {publishErr}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+                <button
+                  type="button"
+                  onClick={() => setPublishOpen(false)}
+                  style={{ padding: '7px 12px', borderRadius: 7, border: '1px solid #cbd5e1', background: '#fff', fontSize: 12, cursor: 'pointer' }}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  disabled={publishBusy}
+                  onClick={() => void handlePublishTemplate()}
+                  style={{
+                    padding: '7px 14px',
+                    borderRadius: 7,
+                    border: 'none',
+                    background: '#0d9488',
+                    color: '#fff',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: publishBusy ? 'wait' : 'pointer',
+                  }}
+                >
+                  {publishBusy ? 'Публикация…' : 'Опубликовать'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 from app.core.auth import check_owner, get_current_user
 from app.core.db import get_session
 from app.core.models import User, Workflow
+from app.core.template_utils import VALID_TEMPLATE_VISIBILITIES, sanitize_graph_for_template
 from app.engine.executor import Executor
 from app.engine.graph import GraphError, validate_graph
 from app.engine.scheduler import (
@@ -132,6 +133,11 @@ def update_workflow(
         w.description = body.description
     if body.is_template is not None:
         w.is_template = body.is_template
+        if w.is_template:
+            if w.visibility not in VALID_TEMPLATE_VISIBILITIES:
+                w.visibility = "private"
+            w.graph_json = sanitize_graph_for_template(w.graph_json or {})
+            w.published_at = w.published_at or datetime.now(timezone.utc)
     w.updated_at = datetime.now(timezone.utc)
     session.add(w)
     session.commit()

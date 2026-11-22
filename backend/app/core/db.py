@@ -140,6 +140,48 @@ def _ensure_columns(engine) -> None:
                 },
             )
 
+        if 3 not in applied:
+            if "workflows" in existing_tables:
+                existing_wf_cols = {c["name"] for c in insp.get_columns("workflows")}
+                ts_type = "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "TEXT"
+                wf_cols = [
+                    ("visibility", "TEXT DEFAULT 'private'"),
+                    ("published_at", ts_type),
+                    ("source_template_id", "TEXT"),
+                ]
+                for col, col_def in wf_cols:
+                    if col not in existing_wf_cols:
+                        conn.execute(text(f"ALTER TABLE workflows ADD COLUMN {col} {col_def}"))
+                conn.execute(
+                    text(
+                        "UPDATE workflows SET visibility = 'public' "
+                        "WHERE is_template = TRUE AND owner_id IS NULL"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "UPDATE workflows SET visibility = 'private' "
+                        "WHERE visibility IS NULL OR visibility = ''"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_workflows_template_visibility_idx "
+                        "ON workflows (is_template, visibility)"
+                    )
+                )
+            conn.execute(
+                text(
+                    "INSERT INTO schema_migrations (version, name, applied_at) "
+                    "VALUES (:v, :n, :t)"
+                ),
+                {
+                    "v": 3,
+                    "n": "ensure_template_visibility_columns",
+                    "t": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+
 
 def init_db() -> None:
     engine = get_engine()

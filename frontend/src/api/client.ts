@@ -197,9 +197,50 @@ export async function updateWorkflow(
   });
 }
 
-export async function listTemplates(): Promise<TemplateDto[]> {
-  const data = await requestJson<{ templates: TemplateDto[] }>('/api/templates');
+export async function listTemplates(opts?: {
+  scope?: 'all' | 'mine' | 'public';
+  q?: string;
+}): Promise<TemplateDto[]> {
+  const params = new URLSearchParams();
+  if (opts?.scope) params.set('scope', opts.scope);
+  if (opts?.q?.trim()) params.set('q', opts.q.trim());
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const data = await requestJson<{ templates: TemplateDto[] }>(`/api/templates${qs}`);
   return data.templates ?? [];
+}
+
+export async function getTemplate(templateId: string): Promise<TemplateDto> {
+  return requestJson<TemplateDto>(`/api/templates/${encodeURIComponent(templateId)}`);
+}
+
+export async function publishTemplate(payload: {
+  workflow_id: string;
+  name?: string;
+  description?: string;
+  visibility: 'private' | 'public';
+}): Promise<TemplateDto> {
+  return requestJson<TemplateDto>('/api/templates/publish', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateTemplate(
+  templateId: string,
+  payload: { name?: string; description?: string; visibility?: 'private' | 'public' },
+): Promise<TemplateDto> {
+  return requestJson<TemplateDto>(`/api/templates/${encodeURIComponent(templateId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteTemplate(templateId: string): Promise<{ ok: boolean }> {
+  return requestJson<{ ok: boolean }>(`/api/templates/${encodeURIComponent(templateId)}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function copyTemplate(templateId: string): Promise<WorkflowDto> {

@@ -121,10 +121,20 @@ export type WorkflowDto = {
   updated_at?: string | null;
 };
 
+export type TemplateVisibility = 'private' | 'public';
+
 export type TemplateDto = {
   id: string;
   name: string;
   description: string;
+  visibility?: TemplateVisibility;
+  owner_id?: string | null;
+  owner_email?: string;
+  is_system?: boolean;
+  is_owner?: boolean;
+  published_at?: string | null;
+  nodes_count?: number;
+  source_template_id?: string | null;
   graph_json: BackendGraph;
 };
 

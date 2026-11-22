@@ -137,7 +137,10 @@ class Workflow(SQLModel, table=True):
     id: str = SQLField(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     name: str
     graph_json: dict = SQLField(default_factory=dict, sa_column=Column(JSON))
-    is_template: bool = False
+    is_template: bool = SQLField(default=False, index=True)
+    visibility: str = SQLField(default="private", index=True)  # private | public
+    published_at: datetime | None = None
+    source_template_id: str | None = None
     description: str = ""
     owner_id: str | None = SQLField(default=None, index=True)
     created_at: datetime = SQLField(default_factory=_utcnow)

@@ -7,6 +7,7 @@ type NodeSidebarProps = {
   templates: TemplateDto[];
   onAddNode: (spec: NodeTypeSpec) => void;
   onApplyTemplate: (template: TemplateDto) => void;
+  onOpenTemplatesModal?: () => void;
   onGenerateWorkflow?: (prompt: string) => Promise<void>;
 };
 
@@ -34,6 +35,7 @@ export default function NodeSidebar({
   templates,
   onAddNode,
   onApplyTemplate,
+  onOpenTemplatesModal,
   onGenerateWorkflow,
 }: NodeSidebarProps) {
   const [aiPrompt, setAiPrompt] = useState('');
@@ -172,32 +174,72 @@ export default function NodeSidebar({
 
       {templates.length > 0 && (
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 6, textTransform: 'uppercase' }}>
-            Готовые шаблоны
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>
+              Готовые шаблоны
+            </div>
+            {onOpenTemplatesModal && (
+              <button
+                type="button"
+                onClick={onOpenTemplatesModal}
+                style={{
+                  padding: '2px 7px',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  borderRadius: 6,
+                  border: '1px solid #c7d2fe',
+                  background: '#fff',
+                  color: '#4338ca',
+                  cursor: 'pointer',
+                }}
+              >
+                Все ({templates.length})
+              </button>
+            )}
           </div>
-          {templates.map((tpl) => (
-            <button
-              key={tpl.id}
-              onClick={() => onApplyTemplate(tpl)}
-              style={{
-                display: 'block',
-                width: '100%',
-                marginBottom: 6,
-                padding: '8px 10px',
-                textAlign: 'left',
-                background: '#eef2ff',
-                border: '1px solid #c7d2fe',
-                borderRadius: 8,
-                cursor: 'pointer',
-              }}
-              title={tpl.description}
-            >
-              <div style={{ fontWeight: 700, fontSize: 12, color: '#3730a3' }}>{tpl.name}</div>
-              {tpl.description && (
-                <div style={{ fontSize: 11, color: '#4f46e5', marginTop: 2 }}>{tpl.description}</div>
-              )}
-            </button>
-          ))}
+          {templates.map((tpl) => {
+            const visLabel = tpl.is_system ? 'system' : tpl.visibility || 'private';
+            return (
+              <button
+                key={tpl.id}
+                onClick={() => onApplyTemplate(tpl)}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  marginBottom: 6,
+                  padding: '8px 10px',
+                  textAlign: 'left',
+                  background: '#eef2ff',
+                  border: '1px solid #c7d2fe',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                }}
+                title={tpl.description}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontWeight: 700, fontSize: 12, color: '#3730a3' }}>{tpl.name}</span>
+                  <span
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      padding: '1px 5px',
+                      borderRadius: 999,
+                      background:
+                        visLabel === 'system' ? '#dbeafe' : visLabel === 'public' ? '#dcfce7' : '#fef3c7',
+                      color:
+                        visLabel === 'system' ? '#1e40af' : visLabel === 'public' ? '#166534' : '#92400e',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    {visLabel}
+                  </span>
+                </div>
+                {tpl.description && (
+                  <div style={{ fontSize: 11, color: '#4f46e5', marginTop: 2 }}>{tpl.description}</div>
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
 

@@ -68,7 +68,11 @@ def test_schema_migrations_recorded_idempotently(tmp_path, monkeypatch):
 
     with db_mod.get_engine().connect() as conn:
         rows = conn.execute(text("SELECT version, name FROM schema_migrations ORDER BY version")).fetchall()
-        assert rows == [(1, "ensure_owner_id_columns"), (2, "ensure_core_indexes")]
+        assert rows == [
+            (1, "ensure_owner_id_columns"),
+            (2, "ensure_core_indexes"),
+            (3, "ensure_template_visibility_columns"),
+        ]
 
     db_mod._engine = None
     get_settings.cache_clear()
