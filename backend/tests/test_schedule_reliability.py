@@ -252,3 +252,36 @@ def test_schedule_missing_upload_zip_records_failed_nodes_in_summary(sched_clien
     assert len(failed_nodes) == 1
     assert failed_nodes[0]["node_id"] == "s1"
     assert "git_clone" in failed_nodes[0]["error"]
+
+
+def test_delete_workflow_stops_schedule_even_with_existing_runs(sched_client):
+    client, _, _ = sched_client
+    wf_res = client.post(
+        "/api/workflows",
+        json={
+            "name": "sched-to-delete",
+            "graph_json": {
+                "nodes": [
+                    {"id": "t1", "type": "trigger.schedule", "params": {"cron": "", "interval_seconds": 60}},
+                    {"id": "s1", "type": "source.git_clone", "params": {"url": "https://github.com/TBagirov/training"}},
+                ],
+                "edges": [{"id": "e1", "source": "t1", "target": "s1"}],
+            },
+        },
+    )
+    assert wf_res.status_code == 200
+    wf_id = wf_res.json()["id"]
+    assert sched_mod.scheduler.get_job(f"wf_{wf_id}_t1") is not None
+
+    # Create a run linked to this workflow first
+    run_res = client.post(f"/api/workflows/{wf_id}/run?wait=true")
+    assert run_res.status_code == 200
+
+    # Delete workflow -> must succeed, remove from /api/workflows, and unschedule job
+    del_res = client.delete(f"/api/workflows/{wf_id}")
+    assert del_res.status_code == 200
+    assert del_res.json() == {"ok": True}
+    assert sched_mod.scheduler.get_job(f"wf_{wf_id}_t1") is None
+    assert wf_id not in [w["id"] for w in client.get("/api/workflows").json()["workflows"]]
+    assert client.get(f"/api/workflows/{wf_id}").status_code == 404
+

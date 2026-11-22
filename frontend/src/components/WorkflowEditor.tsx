@@ -255,6 +255,7 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
 
   const [workflowId, setWorkflowId] = useState<string | null>(null);
   const [workflowName, setWorkflowName] = useState<string>('Security Workflow');
+  const [deletingWorkflow, setDeletingWorkflow] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string>('');
   const [lastUpload, setLastUpload] = useState<{ id: string; filename: string } | null>(null);
 
@@ -662,6 +663,53 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
     }
   };
 
+  const handleDeleteWorkflow = async () => {
+    if (!workflowId) {
+      setStatusMsg('Выберите сценарий на сервере (не localStorage).');
+      return;
+    }
+    const targetId = workflowId;
+    const confirmed = window.confirm(
+      `Удалить сценарий «${workflowName}»? Расписание тоже будет остановлено.`,
+    );
+    if (!confirmed) return;
+
+    setDeletingWorkflow(true);
+    try {
+      await api.deleteWorkflow(targetId);
+      const list = await api
+        .listWorkflows()
+        .catch(() => workflows.filter((wf) => wf.id !== targetId));
+      setWorkflows(list);
+
+      if (activeRun?.workflow_id === targetId) {
+        wsRef.current?.close();
+        stopPolling();
+        sessionStorage.removeItem(ACTIVE_RUN_KEY);
+        setIsRunning(false);
+        setActiveRun(null);
+        setFindings([]);
+        setReportMd('');
+        setWsEvents([]);
+      }
+
+      const freshStarter = buildSmartPipelineNodes(catalog, lastUpload?.id ?? '', integrations);
+      setNodes(freshStarter.nodes);
+      setEdges(freshStarter.edges);
+      setWorkflowId(null);
+      setWorkflowName('Security Workflow');
+      void refreshRunsHistory();
+      setStatusMsg('Сценарий удалён.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatusMsg(`Ошибка удаления сценария: ${msg}`);
+      const list = await api.listWorkflows().catch(() => null);
+      if (list) setWorkflows(list);
+    } finally {
+      setDeletingWorkflow(false);
+    }
+  };
+
   const applyCopiedWorkflow = async (copied: WorkflowDto) => {
     const conv = fromBackendGraph(copied.graph_json, catalog);
     if (lastUpload) {
@@ -943,6 +991,30 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
               </option>
             ))}
           </select>
+
+          <button
+            type="button"
+            onClick={() => void handleDeleteWorkflow()}
+            disabled={!workflowId || deletingWorkflow}
+            title={
+              workflowId
+                ? `Удалить сценарий «${workflowName}» с сервера`
+                : 'Выберите сценарий на сервере (не localStorage)'
+            }
+            style={{
+              padding: '5px 10px',
+              borderRadius: 6,
+              border: '1px solid #991b1b',
+              background: !workflowId || deletingWorkflow ? '#1e293b' : '#7f1d1d',
+              color: !workflowId || deletingWorkflow ? '#64748b' : '#fecaca',
+              cursor: !workflowId || deletingWorkflow ? 'not-allowed' : 'pointer',
+              fontSize: 12,
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {deletingWorkflow ? 'Удаление…' : 'Удалить сценарий'}
+          </button>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>

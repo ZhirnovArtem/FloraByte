@@ -197,6 +197,13 @@ export async function updateWorkflow(
   });
 }
 
+export async function deleteWorkflow(id: string): Promise<void> {
+  await requestJson<{ ok: boolean }>(
+    `/api/workflows/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  );
+}
+
 export async function listTemplates(opts?: {
   scope?: 'all' | 'mine' | 'public';
   q?: string;
