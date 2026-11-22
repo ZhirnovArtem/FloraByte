@@ -681,7 +681,10 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
       const schedWarnings = saved.schedule_warnings ?? [];
       const schedEntries = saved.schedule_summary ?? [];
       const schedDesc = schedEntries
-        .map((s) => (s.cron ? `cron=${s.cron}` : `interval=${s.interval_seconds}s`))
+        .map((s) => {
+          const base = s.cron ? `cron=${s.cron}` : `interval=${s.interval_seconds}s`;
+          return s.max_runs ? `${base}, лимит ${s.runs_used ?? 0}/${s.max_runs}` : base;
+        })
         .join(', ');
       if (schedWarnings.length > 0 && (saved.scheduled_jobs ?? 0) === 0) {
         setStatusMsg(`⚠️ Сценарий "${saved.name}" сохранён, но расписание не активно: ${schedWarnings.join(' ')}`);

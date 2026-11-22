@@ -11,6 +11,10 @@ from app.nodes.registry import register_node
 class Params(BaseModel):
     cron: str = Field("", description="Cron expression, e.g. '0 9 * * 1-5' (оставьте пустым при использовании интервала)")
     interval_seconds: int | None = Field(None, description="Интервал запуска на сервере в секундах (минимум 30с; повтор делает сервер)")
+    max_runs: int | None = Field(
+        None,
+        description="Максимум автозапусков по расписанию (пусто или 0 — без лимита; после достижения лимита расписание останавливается)",
+    )
 
 
 @register_node

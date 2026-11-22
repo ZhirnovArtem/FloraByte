@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -67,7 +67,15 @@ def list_runs(
     items = list(session.exec(select(Run).limit(500)).all())
     if user is not None:
         items = [r for r in items if r.owner_id in (None, user.id)]
-    items.sort(key=lambda r: r.started_at or r.finished_at or r.id, reverse=True)
+    def _run_sort_key(r: Run):
+        dt = r.started_at or r.finished_at
+        if dt is None:
+            return (0, datetime.min.replace(tzinfo=timezone.utc), r.id)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (1, dt, r.id)
+
+    items.sort(key=_run_sort_key, reverse=True)
     items = items[:limit]
     return {"runs": [_run_dict(r) for r in items]}
 

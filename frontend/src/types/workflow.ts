@@ -18,6 +18,7 @@ export type PortSpec = {
 
 export type JsonSchemaProperty = {
   type?: string;
+  anyOf?: Array<{ type?: string }>;
   title?: string;
   description?: string;
   default?: unknown;
@@ -111,10 +112,14 @@ export type WorkflowDto = {
   is_template: boolean;
   graph_json: BackendGraph;
   scheduled_jobs?: number;
+  schedule_runs_used?: number;
   schedule_summary?: Array<{
     node_id: string;
     cron?: string;
     interval_seconds?: number | null;
+    max_runs?: number | null;
+    runs_used?: number | null;
+    limit_reached?: boolean;
   }>;
   schedule_warnings?: string[];
   created_at?: string | null;

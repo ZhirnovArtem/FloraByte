@@ -21,6 +21,11 @@ export const fallbackNodeCatalog: NodeTypeSpec[] = [
       properties: {
         cron: { type: 'string', default: '', description: 'Cron expression e.g. "0 9 * * 1-5" (оставьте пустым для интервала)' },
         interval_seconds: { type: 'integer', default: 60, description: 'Интервал запуска на сервере (минимум 30с; повтор делает сервер)' },
+        max_runs: {
+          anyOf: [{ type: 'integer' }, { type: 'null' }],
+          default: null,
+          description: 'Максимум автозапусков по расписанию (пусто или 0 — без лимита)',
+        },
       },
     },
   },

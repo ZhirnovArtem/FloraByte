@@ -14,6 +14,7 @@ from app.core.template_utils import VALID_TEMPLATE_VISIBILITIES, sanitize_graph_
 from app.engine.executor import Executor
 from app.engine.graph import GraphError, validate_graph
 from app.engine.scheduler import (
+    count_schedule_runs,
     get_workflow_scheduled_jobs_count,
     inspect_schedule_graph,
     reload_schedules,
@@ -41,9 +42,11 @@ class WorkflowUpdate(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-def _to_dict(w: Workflow) -> dict:
+def _to_dict(w: Workflow, session: Session | None = None) -> dict:
     graph = w.graph_json or {}
-    active_schedules, schedule_warnings = inspect_schedule_graph(graph)
+    has_sched = any(n.get("type") == "trigger.schedule" for n in (graph.get("nodes") or []))
+    used_runs = count_schedule_runs(session, w.id) if (session is not None and has_sched) else None
+    active_schedules, schedule_warnings = inspect_schedule_graph(graph, used_runs=used_runs)
     return {
         "id": w.id,
         "name": w.name,
@@ -51,6 +54,7 @@ def _to_dict(w: Workflow) -> dict:
         "is_template": w.is_template,
         "description": w.description,
         "scheduled_jobs": get_workflow_scheduled_jobs_count(w.id),
+        "schedule_runs_used": used_runs or 0,
         "schedule_summary": active_schedules,
         "schedule_warnings": schedule_warnings,
         "created_at": w.created_at.isoformat() if w.created_at else None,
@@ -66,7 +70,7 @@ def list_workflows(
     items = session.exec(select(Workflow).where(Workflow.is_template == False)).all()  # noqa: E712
     if user is not None:
         items = [w for w in items if w.owner_id in (None, user.id)]
-    return {"workflows": [_to_dict(w) for w in items]}
+    return {"workflows": [_to_dict(w, session) for w in items]}
 
 
 @router.post("")
@@ -93,7 +97,7 @@ def create_workflow(
     session.commit()
     session.refresh(w)
     reload_schedules(session)
-    return _to_dict(w)
+    return _to_dict(w, session)
 
 
 @router.get("/{workflow_id}")
@@ -106,7 +110,7 @@ def get_workflow(
     if not w:
         raise HTTPException(404, "Workflow not found")
     check_owner(w.owner_id, user)
-    return _to_dict(w)
+    return _to_dict(w, session)
 
 
 @router.put("/{workflow_id}")
@@ -143,7 +147,7 @@ def update_workflow(
     session.commit()
     session.refresh(w)
     reload_schedules(session)
-    return _to_dict(w)
+    return _to_dict(w, session)
 
 
 @router.delete("/{workflow_id}")

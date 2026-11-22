@@ -258,8 +258,8 @@ export default function NodeSettings({
           }}
         >
           <strong>Повтор делает сервер</strong> (APScheduler), не стрелка в графе. Задайте{' '}
-          <code>interval_seconds ≥ 30</code> (Cron пустой) или Cron-выражение, затем нажмите{' '}
-          <strong>Применить</strong> и <strong>Сохранить</strong> сценарий.
+          <code>interval_seconds ≥ 30</code> (Cron пустой) или Cron-выражение, а при необходимости ограничьте число отправок через{' '}
+          <code>max_runs</code> (пусто или 0 — без лимита), затем нажмите <strong>Применить</strong> и <strong>Сохранить</strong>.
         </div>
       )}
 
@@ -286,8 +286,11 @@ export default function NodeSettings({
       )}
 
       {propEntries.map(([key, prop]) => {
-        const val = params[key] ?? prop.default ?? '';
-        const fieldType = prop.type ?? 'string';
+        const rawVal = params[key] !== undefined ? params[key] : prop.default;
+        const val = rawVal === null || rawVal === undefined ? '' : rawVal;
+        const anyOfTypes = (prop.anyOf ?? []).map((x) => x.type).filter((t): t is string => Boolean(t));
+        const isNullable = anyOfTypes.includes('null');
+        const fieldType = prop.type ?? anyOfTypes.find((t) => t !== 'null') ?? 'string';
 
         if (fieldType === 'boolean') {
           return (
@@ -394,13 +397,25 @@ export default function NodeSettings({
               )}
               <input
                 type={fieldType === 'integer' || fieldType === 'number' ? 'number' : 'text'}
+                min={key === 'max_runs' ? 0 : undefined}
+                placeholder={isNullable ? 'Без лимита (пусто)' : undefined}
                 style={inputStyle}
                 value={String(val)}
                 onChange={(e) => {
                   if (fieldType === 'integer') {
-                    updateParam(key, e.target.value === '' ? 0 : parseInt(e.target.value, 10));
+                    if (e.target.value === '') {
+                      updateParam(key, isNullable ? null : 0);
+                    } else {
+                      const parsed = parseInt(e.target.value, 10);
+                      updateParam(key, Number.isNaN(parsed) ? (isNullable ? null : 0) : parsed);
+                    }
                   } else if (fieldType === 'number') {
-                    updateParam(key, e.target.value === '' ? 0 : parseFloat(e.target.value));
+                    if (e.target.value === '') {
+                      updateParam(key, isNullable ? null : 0);
+                    } else {
+                      const parsed = parseFloat(e.target.value);
+                      updateParam(key, Number.isNaN(parsed) ? (isNullable ? null : 0) : parsed);
+                    }
                   } else {
                     updateParam(key, e.target.value);
                   }
