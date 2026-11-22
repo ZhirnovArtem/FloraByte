@@ -5,6 +5,8 @@ type NodeSidebarProps = {
   catalog: NodeTypeSpec[];
   catalogSource: 'api' | 'fallback';
   templates: TemplateDto[];
+  isOpen: boolean;
+  onToggle: () => void;
   onAddNode: (spec: NodeTypeSpec) => void;
   onApplyTemplate: (template: TemplateDto) => void;
   onOpenTemplatesModal?: () => void;
@@ -33,6 +35,8 @@ export default function NodeSidebar({
   catalog,
   catalogSource,
   templates,
+  isOpen,
+  onToggle,
   onAddNode,
   onApplyTemplate,
   onOpenTemplatesModal,
@@ -40,6 +44,66 @@ export default function NodeSidebar({
 }: NodeSidebarProps) {
   const [aiPrompt, setAiPrompt] = useState('');
   const [generating, setGenerating] = useState(false);
+
+  if (!isOpen) {
+    return (
+      <aside
+        onClick={onToggle}
+        title="Развернуть панель блоков (нод)"
+        style={{
+          width: 40,
+          padding: '10px 4px',
+          background: '#f8fafc',
+          borderRight: '1px solid #e2e8f0',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 10,
+          flexShrink: 0,
+          overflow: 'hidden',
+          cursor: 'pointer',
+          userSelect: 'none',
+        }}
+      >
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
+          aria-label="Развернуть панель блоков"
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 6,
+            border: '1px solid #cbd5e1',
+            background: '#fff',
+            color: '#334155',
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          ▶
+        </button>
+        <span
+          style={{
+            writingMode: 'vertical-rl',
+            transform: 'rotate(180deg)',
+            fontSize: 12,
+            fontWeight: 700,
+            color: '#475569',
+            letterSpacing: '0.03em',
+          }}
+        >
+          Блоки (ноды)
+        </span>
+      </aside>
+    );
+  }
 
   const grouped = new Map<string, NodeTypeSpec[]>();
   for (const item of catalog) {
@@ -76,20 +140,40 @@ export default function NodeSidebar({
         flexShrink: 0,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-        <h3 style={{ margin: 0, fontSize: 16 }}>Блоки (ноды)</h3>
-        <span
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <h3 style={{ margin: 0, fontSize: 16 }}>Блоки (ноды)</h3>
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              padding: '2px 7px',
+              borderRadius: 999,
+              background: catalogSource === 'api' ? '#dcfce7' : '#fef3c7',
+              color: catalogSource === 'api' ? '#166534' : '#92400e',
+            }}
+          >
+            {catalogSource === 'api' ? 'API' : 'Offline'}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          title="Свернуть панель блоков"
           style={{
-            fontSize: 10,
-            fontWeight: 700,
-            padding: '2px 7px',
-            borderRadius: 999,
-            background: catalogSource === 'api' ? '#dcfce7' : '#fef3c7',
-            color: catalogSource === 'api' ? '#166534' : '#92400e',
+            padding: '3px 7px',
+            borderRadius: 6,
+            border: '1px solid #cbd5e1',
+            background: '#fff',
+            color: '#475569',
+            fontSize: 11,
+            fontWeight: 600,
+            cursor: 'pointer',
+            flexShrink: 0,
           }}
         >
-          {catalogSource === 'api' ? 'API' : 'Offline'}
-        </span>
+          ◀ Свернуть
+        </button>
       </div>
 
       {onGenerateWorkflow && (

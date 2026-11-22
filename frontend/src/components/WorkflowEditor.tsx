@@ -76,6 +76,8 @@ const DEFAULT_INTEGRATIONS: IntegrationsDto = {
 
 const STORAGE_KEY = 'florabyte-workflow';
 const ACTIVE_RUN_KEY = 'florabyte-active-run-id';
+const PALETTE_OPEN_KEY = 'florabyte-palette-open';
+const NODE_PANEL_OPEN_KEY = 'florabyte-node-panel-open';
 const TERMINAL_RUN_STATUSES = new Set(['success', 'failed', 'partial']);
 const MAX_ZIP_NAME_CHARS = 22;
 
@@ -270,6 +272,53 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
   const [wsEvents, setWsEvents] = useState<WsRunEvent[]>([]);
   const [runsHistory, setRunsHistory] = useState<RunDto[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(PALETTE_OPEN_KEY) !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const [nodePanelOpen, setNodePanelOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(NODE_PANEL_OPEN_KEY) !== 'false';
+    } catch {
+      return true;
+    }
+  });
+
+  const togglePalette = useCallback(() => {
+    setPaletteOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(PALETTE_OPEN_KEY, String(next));
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleNodePanel = useCallback(() => {
+    setNodePanelOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(NODE_PANEL_OPEN_KEY, String(next));
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  }, []);
+
+  const openNodePanel = useCallback(() => {
+    setNodePanelOpen(true);
+    try {
+      localStorage.setItem(NODE_PANEL_OPEN_KEY, 'true');
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pollTimerRef = useRef<number | null>(null);
@@ -1275,6 +1324,8 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
           catalog={catalog}
           catalogSource={catalogSource}
           templates={templates}
+          isOpen={paletteOpen}
+          onToggle={togglePalette}
           onAddNode={addNode}
           onApplyTemplate={applyTemplate}
           onOpenTemplatesModal={() => setTemplatesOpen(true)}
@@ -1293,6 +1344,7 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            onNodeClick={openNodePanel}
             isValidConnection={(connection) => !connectionError(connection, nodes, edges)}
             nodesDraggable
             nodesConnectable
@@ -1313,6 +1365,8 @@ function WorkflowEditorContent({ user, onLogout }: WorkflowEditorProps) {
           selectedNode={selectedNode}
           nodeSpec={selectedNode ? specByType.get(selectedNode.data.kind) : undefined}
           credentials={credentials}
+          isOpen={nodePanelOpen}
+          onToggle={toggleNodePanel}
           onSave={saveNodeSettings}
           onUploadZip={handleUploadZip}
           onCreateCredential={handleCreateCredential}

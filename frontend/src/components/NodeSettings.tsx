@@ -6,6 +6,8 @@ type NodeSettingsProps = {
   selectedNode: SecurityNodeType | null;
   nodeSpec?: NodeTypeSpec;
   credentials: CredentialDto[];
+  isOpen: boolean;
+  onToggle: () => void;
   onSave: (nodeId: string, label: string, params: Record<string, unknown>) => void;
   onUploadZip?: (file: File) => Promise<string | null>;
   onCreateCredential?: (name: string, kind: string, value: string) => Promise<CredentialDto | null>;
@@ -15,6 +17,8 @@ export default function NodeSettings({
   selectedNode,
   nodeSpec,
   credentials,
+  isOpen,
+  onToggle,
   onSave,
   onUploadZip,
   onCreateCredential,
@@ -26,6 +30,65 @@ export default function NodeSettings({
   const [credValue, setCredValue] = useState('');
   const [showNewCred, setShowNewCred] = useState(false);
 
+  if (!isOpen) {
+    return (
+      <aside
+        onClick={onToggle}
+        title="Развернуть настройки блока"
+        style={{
+          width: 40,
+          padding: '10px 4px',
+          background: '#f8fafc',
+          borderLeft: '1px solid #e2e8f0',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 10,
+          flexShrink: 0,
+          overflow: 'hidden',
+          cursor: 'pointer',
+          userSelect: 'none',
+        }}
+      >
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
+          aria-label="Развернуть настройки блока"
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 6,
+            border: '1px solid #cbd5e1',
+            background: '#fff',
+            color: '#334155',
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          ◀
+        </button>
+        <span
+          style={{
+            writingMode: 'vertical-rl',
+            fontSize: 12,
+            fontWeight: 700,
+            color: '#475569',
+            letterSpacing: '0.03em',
+          }}
+        >
+          Настройки блока
+        </span>
+      </aside>
+    );
+  }
+
   const inputStyle: React.CSSProperties = {
     width: '100%',
     padding: '8px 9px',
@@ -35,6 +98,27 @@ export default function NodeSettings({
     marginBottom: 12,
     fontSize: 13,
   };
+
+  const collapseBtn = (
+    <button
+      type="button"
+      onClick={onToggle}
+      title="Свернуть панель настроек"
+      style={{
+        padding: '3px 7px',
+        borderRadius: 6,
+        border: '1px solid #cbd5e1',
+        background: '#fff',
+        color: '#475569',
+        fontSize: 11,
+        fontWeight: 600,
+        cursor: 'pointer',
+        flexShrink: 0,
+      }}
+    >
+      Свернуть ▶
+    </button>
+  );
 
   if (!selectedNode) {
     return (
@@ -47,7 +131,10 @@ export default function NodeSettings({
           flexShrink: 0,
         }}
       >
-        <h3 style={{ marginTop: 0 }}>Настройки блока</h3>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8 }}>
+          <h3 style={{ margin: 0 }}>Настройки блока</h3>
+          {collapseBtn}
+        </div>
         <p style={{ color: '#64748b', fontSize: 13 }}>Выберите блок на схеме для редактирования параметров.</p>
       </aside>
     );
@@ -107,7 +194,10 @@ export default function NodeSettings({
         flexShrink: 0,
       }}
     >
-      <h3 style={{ marginTop: 0, marginBottom: 6 }}>Настройки блока</h3>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 8 }}>
+        <h3 style={{ margin: 0 }}>Настройки блока</h3>
+        {collapseBtn}
+      </div>
       <div style={{ fontSize: 12, color: '#64748b', fontFamily: 'monospace', marginBottom: 14 }}>
         {kind}
       </div>
